@@ -73,12 +73,20 @@
 <!-- Plotly -->
 <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 
-<!-- App logic using DuckDB-Wasm via package-level ESM (+esm) -->
+<!-- App logic using DuckDB-Wasm ESM -->
 <script type="module">
-  // Import the package ESM entry. Do NOT reference internal file paths.
+  // Library via ESM (fine to load cross-origin)
   import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
 
-  // Hugging Face Parquet files (2018–2023). Update names/paths if needed.
+  // === LOCAL paths for worker & wasm to avoid cross-origin worker block ===
+  const LOCAL_BASE = "/experiments/vendor/duckdb/1.29.0/"; // adjust if your page path changes
+  const LOCAL_BUNDLE = {
+    mainWorker:    LOCAL_BASE + "duckdb-browser-eh.worker.js",
+    pthreadWorker: LOCAL_BASE + "duckdb-browser-eh.pthread.worker.js",
+    mainModule:    LOCAL_BASE + "duckdb-eh.wasm"
+  };
+
+  // Hugging Face Parquet files (2018–2023)
   const PARQUET_URLS = [
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2018.parquet",
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2019.parquet",
@@ -88,7 +96,6 @@
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2023.parquet"
   ];
 
-  // LDCs
   const LDCs = new Set([
     'Afghanistan','Angola','Bangladesh','Benin','Bhutan','Burkina Faso','Burundi',
     'Cambodia','Central African Republic','Chad','Comoros','Democratic Republic of the Congo',
@@ -99,7 +106,6 @@
     'Togo','Tuvalu','Uganda','United Republic of Tanzania','Yemen','Zambia'
   ]);
 
-  // Helpers
   const toArray = (table) => {
     const cols = table.schema.fields.map(f => f.name), out=[];
     for (let i=0;i<table.numRows;i++){ const r={}; for (let c=0;c<cols.length;c++) r[cols[c]]=table.getChild(c).get(i); out.push(r); }
@@ -110,18 +116,16 @@
     arr.forEach((v,i)=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; if(i<pre) o.selected=true; sel.appendChild(o); });
   };
 
-  // DuckDB-Wasm init (use official bundle selector)
-  const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();         // provides proper URLs for this version
-  const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);   // picks eh/mvp based on browser
-  const worker = new Worker(bundle.mainWorker);
+  // --- Init DuckDB with LOCAL worker/wasm ---
+  const worker = new Worker(LOCAL_BUNDLE.mainWorker);
   const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+  await db.instantiate(LOCAL_BUNDLE.mainModule, LOCAL_BUNDLE.pthreadWorker);
   const conn = await db.connect();
 
   await conn.query(`INSTALL httpfs; LOAD httpfs;`);
   await conn.query(`SET enable_http_metadata_cache=true; SET enable_object_cache=true;`);
 
-  // Register Parquet URLs and create unified view
+  // --- Register Parquet URLs and create unified view ---
   const scans = PARQUET_URLS.map(u => `parquet_scan('${u}')`).join(', ');
   await conn.query(`
     CREATE OR REPLACE VIEW crs AS
@@ -137,7 +141,7 @@
     WHERE usd_disbursement IS NOT NULL AND usd_disbursement > 0
   `);
 
-  // Determine year window and build LDC+last-5 view
+  // --- Determine last-5 window ---
   const y = await conn.query(`SELECT min(year) AS miny, max(year) AS maxy FROM crs;`);
   const { miny, maxy } = toArray(y)[0];
   const cutoff = maxy - 4;
@@ -175,7 +179,7 @@
     FROM crs_ldc5_sectors
   `);
 
-  // Populate filter controls
+  // --- Populate filters ---
   const distinct = async (col) => toArray(await conn.query(`SELECT DISTINCT ${col} AS v FROM crs_final ORDER BY ${col};`)).map(r=>r.v);
   const countries = await distinct('Country');
   const donors    = await distinct('Donor');
@@ -187,7 +191,7 @@
   fillSelect('sectorSel', sectors, sectors.length);
   fillSelect('rioSel', rios, rios.length);
 
-  // Render routine
+  // --- Render ---
   const rowsBadge = document.getElementById('rowsBadge');
   const sumBadge  = document.getElementById('sumBadge');
 
@@ -211,7 +215,6 @@
     const total = tbl.reduce((a,r)=>a+(+r["USD (M)"]),0);
     sumBadge.textContent = `Total: ${total.toFixed(2)} M USD`;
 
-    // Sankey links (M USD)
     const labels = ["Total Aid"];
     const idx = (l)=>{ let i=labels.indexOf(l); if(i===-1){labels.push(l); i=labels.length-1;} return i; };
     const src=[],tgt=[],val=[];
@@ -242,7 +245,6 @@
           font:{size:12}, paper_bgcolor:"transparent", plot_bgcolor:"transparent",
           height:640, margin:{t:40,l:10,r:10,b:10} });
 
-    // Table
     const el=document.getElementById('table'); el.innerHTML="";
     const t=document.createElement('table');
     t.innerHTML = `<thead><tr><th>Donor</th><th>Climate</th><th>Sector</th><th>USD (M)</th></tr></thead>`;
@@ -258,3 +260,4 @@
 </script>
 </body>
 </html>
+
