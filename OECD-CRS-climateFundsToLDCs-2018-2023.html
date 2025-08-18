@@ -11,7 +11,7 @@
   html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Helvetica,Arial;}
   header { padding:20px; border-bottom:1px solid #1e2746; }
   h1 { margin:0 0 8px 0; font-size:20px; }
-  .sub { color:var(--muted); }
+  .sub { color:#9aa3b2; }
   main { display:grid; grid-template-columns: 320px 1fr; gap:16px; padding:16px; }
   .panel { background:var(--card); border:1px solid #1e2746; border-radius:14px; padding:14px; }
   label { display:block; margin-top:10px; color:#cbd3e3; font-weight:600; }
@@ -70,39 +70,41 @@
   </section>
 </main>
 
-<!-- Plotly -->
 <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 
-<!-- App logic: DuckDB-Wasm ESM + same-origin blob worker (MVP forced) -->
 <script type="module">
   import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
 
-  // ----- Force MVP (no COOP/COEP needed) -----
-  const mvpBundle = {
-    mainWorker: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/duckdb-browser-mvp.worker.js",
-    mainModule: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/duckdb-mvp.wasm",
-    pthreadWorker: null
-  };
+  // ---- FORCE MVP (no COOP/COEP) ----
+  const DUCKDB_DIST = "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/";
+  const MVP_WORKER = DUCKDB_DIST + "duckdb-browser-mvp.worker.js";
+  const MVP_WASM   = DUCKDB_DIST + "duckdb-mvp.wasm";
 
-  // Same-origin wrapper worker -> loads real worker from CDN
-  const mkBlobWorkerURL = (cdnUrl) => {
-    const code = `importScripts(${JSON.stringify(cdnUrl)});`;
+  // Same-origin wrapper worker that sets locateFile BEFORE importing real worker
+  const mkBlobWorkerURL = (cdnWorkerUrl, wasmBaseUrl) => {
+    const code = `
+      // Instruct Emscripten where to find companion files (e.g., duckdb-mvp.wasm)
+      self.DUCKDB_CONFIG = {
+        locateFile: (f) => ${JSON.stringify(wasmBaseUrl)} + f
+      };
+      importScripts(${JSON.stringify(cdnWorkerUrl)});
+    `;
     return URL.createObjectURL(new Blob([code], { type: "application/javascript" }));
   };
-  const mainWorkerURL = mkBlobWorkerURL(mvpBundle.mainWorker);
 
-  // ----- Init DuckDB (MVP) -----
+  const mainWorkerURL = mkBlobWorkerURL(MVP_WORKER, DUCKDB_DIST);
+
+  // ---- Init DuckDB (MVP) ----
   const worker = new Worker(mainWorkerURL);
   const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-  await db.instantiate(mvpBundle.mainModule); // MVP: no pthread arg
+  // Pass absolute WASM URL as a belt-and-braces override
+  await db.instantiate(MVP_WASM);
   const conn = await db.connect();
 
   await conn.query(`INSTALL httpfs; LOAD httpfs;`);
   await conn.query(`SET enable_http_metadata_cache=true; SET enable_object_cache=true;`);
 
-  // ===== Parquet file locations (HF or same-origin GitHub Pages) =====
-  // If you move files into your repo, switch to:
-  //  "https://washways.org/experiments/data/CRS_2018.parquet", etc.
+  // ===== Parquet file locations (switch to same-origin URLs if you mirror them) =====
   const PARQUET_URLS = [
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2018.parquet",
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2019.parquet",
@@ -112,7 +114,7 @@
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2023.parquet"
   ];
 
-  // LDCs
+  // LDC set
   const LDCs = new Set([
     'Afghanistan','Angola','Bangladesh','Benin','Bhutan','Burkina Faso','Burundi',
     'Cambodia','Central African Republic','Chad','Comoros','Democratic Republic of the Congo',
@@ -134,7 +136,7 @@
     arr.forEach((v,i)=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; if(i<pre) o.selected=true; sel.appendChild(o); });
   };
 
-  // ===== Read multiple Parquet files (FIXED: use read_parquet([...])) =====
+  // Read multiple Parquet files — use read_parquet([...])
   const fileListLiteral = `[${PARQUET_URLS.map(u => `'${u.replace(/'/g, "''")}'`).join(', ')}]`;
   await conn.query(`
     CREATE OR REPLACE VIEW crs AS
