@@ -75,7 +75,8 @@
 
 <!-- App logic using DuckDB-Wasm ESM -->
 <script type="module">
-  import { AsyncDuckDB, selectBundle, ConsoleLogger } from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-esm.js";
+  // Correct ESM import (v1.28.0)
+  import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-browser-eh.mjs";
 
   // ===== Parquet files on Hugging Face (2018–2023). Edit if your names/paths differ.
   const PARQUET_URLS = [
@@ -110,7 +111,7 @@
   };
 
   // ===== DuckDB-Wasm init (ESM) =====
-  const bundles = await selectBundle({
+  const bundles = await duckdb.selectBundle({
     mvp: {
       mainModule: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb.wasm",
       mainWorker: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-browser-mvp.worker.js"
@@ -122,7 +123,7 @@
   });
 
   const worker = new Worker(bundles.browserBuild.mainWorker);
-  const db = new AsyncDuckDB(new ConsoleLogger(), worker);
+  const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
   await db.instantiate(bundles.browserBuild.mainModule, bundles.browserBuild.pthreadWorker);
   const conn = await db.connect();
 
