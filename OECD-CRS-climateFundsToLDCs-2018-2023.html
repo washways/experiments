@@ -70,15 +70,15 @@
   </section>
 </main>
 
-<!-- Plotly (global) -->
+<!-- Plotly -->
 <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 
-<!-- App logic using DuckDB-Wasm ESM -->
+<!-- App logic using DuckDB-Wasm via package-level ESM (+esm) -->
 <script type="module">
-  // Correct ESM import (v1.28.0)
-  import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-browser-eh.mjs";
+  // Import the package ESM entry. Do NOT reference internal file paths.
+  import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
 
-  // ===== Parquet files on Hugging Face (2018–2023). Edit if your names/paths differ.
+  // Hugging Face Parquet files (2018–2023). Update names/paths if needed.
   const PARQUET_URLS = [
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2018.parquet",
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2019.parquet",
@@ -88,7 +88,7 @@
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2023.parquet"
   ];
 
-  // ===== LDC list =====
+  // LDCs
   const LDCs = new Set([
     'Afghanistan','Angola','Bangladesh','Benin','Bhutan','Burkina Faso','Burundi',
     'Cambodia','Central African Republic','Chad','Comoros','Democratic Republic of the Congo',
@@ -99,7 +99,7 @@
     'Togo','Tuvalu','Uganda','United Republic of Tanzania','Yemen','Zambia'
   ]);
 
-  // ===== Helpers =====
+  // Helpers
   const toArray = (table) => {
     const cols = table.schema.fields.map(f => f.name), out=[];
     for (let i=0;i<table.numRows;i++){ const r={}; for (let c=0;c<cols.length;c++) r[cols[c]]=table.getChild(c).get(i); out.push(r); }
@@ -110,27 +110,18 @@
     arr.forEach((v,i)=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; if(i<pre) o.selected=true; sel.appendChild(o); });
   };
 
-  // ===== DuckDB-Wasm init (ESM) =====
-  const bundles = await duckdb.selectBundle({
-    mvp: {
-      mainModule: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb.wasm",
-      mainWorker: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-browser-mvp.worker.js"
-    },
-    eh: {
-      mainModule: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-eh.wasm",
-      mainWorker: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-browser-eh.worker.js"
-    }
-  });
-
-  const worker = new Worker(bundles.browserBuild.mainWorker);
+  // DuckDB-Wasm init (use official bundle selector)
+  const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();         // provides proper URLs for this version
+  const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);   // picks eh/mvp based on browser
+  const worker = new Worker(bundle.mainWorker);
   const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-  await db.instantiate(bundles.browserBuild.mainModule, bundles.browserBuild.pthreadWorker);
+  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
   const conn = await db.connect();
 
   await conn.query(`INSTALL httpfs; LOAD httpfs;`);
   await conn.query(`SET enable_http_metadata_cache=true; SET enable_object_cache=true;`);
 
-  // ===== Register Parquet URLs and create unified view =====
+  // Register Parquet URLs and create unified view
   const scans = PARQUET_URLS.map(u => `parquet_scan('${u}')`).join(', ');
   await conn.query(`
     CREATE OR REPLACE VIEW crs AS
@@ -146,7 +137,7 @@
     WHERE usd_disbursement IS NOT NULL AND usd_disbursement > 0
   `);
 
-  // ===== Determine year window, then build LDC + last-5 view =====
+  // Determine year window and build LDC+last-5 view
   const y = await conn.query(`SELECT min(year) AS miny, max(year) AS maxy FROM crs;`);
   const { miny, maxy } = toArray(y)[0];
   const cutoff = maxy - 4;
@@ -184,7 +175,7 @@
     FROM crs_ldc5_sectors
   `);
 
-  // ===== Populate filter controls =====
+  // Populate filter controls
   const distinct = async (col) => toArray(await conn.query(`SELECT DISTINCT ${col} AS v FROM crs_final ORDER BY ${col};`)).map(r=>r.v);
   const countries = await distinct('Country');
   const donors    = await distinct('Donor');
@@ -196,7 +187,7 @@
   fillSelect('sectorSel', sectors, sectors.length);
   fillSelect('rioSel', rios, rios.length);
 
-  // ===== Render routine =====
+  // Render routine
   const rowsBadge = document.getElementById('rowsBadge');
   const sumBadge  = document.getElementById('sumBadge');
 
@@ -251,7 +242,7 @@
           font:{size:12}, paper_bgcolor:"transparent", plot_bgcolor:"transparent",
           height:640, margin:{t:40,l:10,r:10,b:10} });
 
-    // Table render
+    // Table
     const el=document.getElementById('table'); el.innerHTML="";
     const t=document.createElement('table');
     t.innerHTML = `<thead><tr><th>Donor</th><th>Climate</th><th>Sector</th><th>USD (M)</th></tr></thead>`;
