@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>OECD Expenditure Explorer — LDCs (2018–2023)</title>
 
-<!-- Inline favicon to silence /favicon.ico 404 -->
+<!-- Inline favicon (kills the /favicon.ico 404) -->
 <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="%230b1020"/><circle cx="32" cy="32" r="18" fill="%236aa0ff"/></svg>'>
 
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
@@ -79,25 +79,40 @@
 <script type="module">
   import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
 
-  // ---- Hard-coded MVP endpoints (no bundle discovery) ----
-  const MVP_WORKER_LOCAL = "/experiments/vendor/duckdb/1.29.0/duckdb-browser-mvp.worker.js"; // you host this small file
-  const MVP_WASM_CDN     = "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/duckdb-mvp.wasm";
-
-  // Optional: basic error logging
+  // --- Strong error logging so we see root causes, not "undefined" ---
+  const log = (...a)=>console.log("[OECD-CRS]", ...a);
   const err = (...a)=>console.error("[OECD-CRS]", ...a);
   window.addEventListener("error", (e)=>err("window error:", e.message, e.error||"", e));
   window.addEventListener("unhandledrejection", (e)=>err("unhandled rejection:", e.reason||e));
 
-  // ---- Init DuckDB (MVP; no pthreads, no COOP/COEP needed) ----
-  const worker = new Worker(MVP_WORKER_LOCAL);
+  // --- Force MVP bundle (works on GitHub Pages; no SharedArrayBuffer) ---
+  const DUCKDB_DIST = "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/";
+  const MVP_WORKER_CDN = DUCKDB_DIST + "duckdb-browser-mvp.worker.js";
+  const MVP_WASM_CDN   = DUCKDB_DIST + "duckdb-mvp.wasm";
+
+  // --- Same-origin blob worker that sets locateFile BEFORE importing the real worker ---
+  // This guarantees the worker always resolves duckdb-mvp.wasm from DUCKDB_DIST.
+  const mkBlobWorkerURL = (cdnWorkerUrl, wasmBaseUrl) => {
+    const code = `
+      self.DUCKDB_CONFIG = { locateFile: (f) => ${JSON.stringify(wasmBaseUrl)} + f };
+      importScripts(${JSON.stringify(cdnWorkerUrl)});
+    `;
+    return URL.createObjectURL(new Blob([code], { type: "application/javascript" }));
+  };
+  const mainWorkerURL = mkBlobWorkerURL(MVP_WORKER_CDN, DUCKDB_DIST);
+
+  // --- Init DuckDB (MVP) ---
+  const worker = new Worker(mainWorkerURL);               // same-origin (blob)
   const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-  await db.instantiate(MVP_WASM_CDN);
+  await db.instantiate(MVP_WASM_CDN).catch(e=>{ err("instantiate failed:", e); throw e; });
   const conn = await db.connect();
 
-  await conn.query(`INSTALL httpfs; LOAD httpfs;`);
+  // --- Enable remote parquet access ---
+  await conn.query(`INSTALL httpfs; LOAD httpfs;`).catch(e=>{ err("httpfs load failed:", e); throw e; });
   await conn.query(`SET enable_http_metadata_cache=true; SET enable_object_cache=true;`);
 
-  // ===== Parquet file locations (use same-origin URLs if you mirror them) =====
+  // ===== Parquet files =====
+  // (Optionally mirror to same-origin: /experiments/data/CRS_2018.parquet, etc.)
   const PARQUET_URLS = [
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2018.parquet",
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2019.parquet",
@@ -107,7 +122,6 @@
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2023.parquet"
   ];
 
-  // LDCs
   const LDCs = new Set([
     'Afghanistan','Angola','Bangladesh','Benin','Bhutan','Burkina Faso','Burundi',
     'Cambodia','Central African Republic','Chad','Comoros','Democratic Republic of the Congo',
@@ -128,7 +142,7 @@
     arr.forEach((v,i)=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; if(i<pre) o.selected=true; sel.appendChild(o); });
   };
 
-  // Read multiple Parquet files (supported syntax)
+  // Read multiple Parquet files (correct approach)
   const fileListLiteral = `[${PARQUET_URLS.map(u => `'${u.replace(/'/g, "''")}'`).join(', ')}]`;
   await conn.query(`
     CREATE OR REPLACE VIEW crs AS
@@ -142,10 +156,9 @@
       CAST(climate_mitigation AS INT)  AS climate_mitigation
     FROM read_parquet(${fileListLiteral})
     WHERE usd_disbursement IS NOT NULL AND usd_disbursement > 0
-  `);
+  `).catch(e=>{ err("read_parquet() failed:", e); throw e; });
 
-  // Last-5-year window & LDC slice
-  const y = await conn.query(`SELECT min(year) AS miny, max(year) AS maxy FROM crs;`);
+  const y = await conn.query(`SELECT min(year) AS miny, max(year) AS maxy FROM crs;`).catch(e=>{ err("min/max year failed:", e); throw e; });
   const { miny, maxy } = toArray(y)[0];
   const cutoff = maxy - 4;
   document.getElementById('yearsBadge').textContent = `${cutoff}–${maxy}`;
@@ -155,7 +168,6 @@
     SELECT * FROM crs
     WHERE year >= ${cutoff} AND Country IN (${[...LDCs].map(s=> `'${s.replace(/'/g,"''")}'`).join(',')})
   `);
-
   await conn.query(`
     CREATE OR REPLACE VIEW crs_ldc5_sectors AS
     SELECT
@@ -173,7 +185,6 @@
       GREATEST(COALESCE(climate_adaptation,0), COALESCE(climate_mitigation,0)) AS rio_score
     FROM crs_ldc5
   `);
-
   await conn.query(`
     CREATE OR REPLACE VIEW crs_final AS
     SELECT
@@ -182,13 +193,12 @@
     FROM crs_ldc5_sectors
   `);
 
-  // UI
+  // UI population
   const distinct = async (col) => toArray(await conn.query(`SELECT DISTINCT ${col} AS v FROM crs_final ORDER BY ${col};`)).map(r=>r.v);
   const countries = await distinct('Country');
   const donors    = await distinct('Donor');
   const sectors   = await distinct('Sector');
   const rios      = await distinct('RioMarker');
-
   fillSelect('countrySel', countries, Math.min(10, countries.length));
   fillSelect('donorSel', donors, Math.min(10, donors.length));
   fillSelect('sectorSel', sectors, sectors.length);
@@ -248,7 +258,6 @@
           font:{size:12}, paper_bgcolor:"transparent", plot_bgcolor:"transparent",
           height:640, margin:{t:40,l:10,r:10,b:10} });
 
-    // Table
     const el=document.getElementById('table'); el.innerHTML="";
     const t=document.createElement('table');
     t.innerHTML = `<thead><tr><th>Donor</th><th>Climate</th><th>Sector</th><th>USD (M)</th></tr></thead>`;
