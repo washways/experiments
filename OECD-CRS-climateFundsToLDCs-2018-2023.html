@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>OECD Expenditure Explorer — LDCs (2018–2023)</title>
 
-<!-- Inline SVG favicon to silence /favicon.ico 404 -->
+<!-- Inline favicon to silence 404 -->
 <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="%230b1020"/><circle cx="32" cy="32" r="18" fill="%236aa0ff"/></svg>'>
 
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
@@ -79,20 +79,52 @@
 <script type="module">
   import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
 
-  // --- Use a SAME-ORIGIN worker (small file you upload), but keep WASM on CDN ---
-  const LOCAL_WORKER = "/experiments/vendor/duckdb/1.29.0/duckdb-browser-mvp.worker.js";
-  const MVP_WASM     = "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/duckdb-mvp.wasm";
+  // ---------- STRONG ERROR LOGGING ----------
+  const log = (...a)=>console.log("[OECD-CRS]", ...a);
+  const err = (...a)=>console.error("[OECD-CRS]", ...a);
+  window.addEventListener("error", (e)=>err("window error:", e.message, e.error||"", e));
+  window.addEventListener("unhandledrejection", (e)=>err("unhandled rejection:", e.reason||e));
 
-  // Init DuckDB with local worker (no pthreads, MVP has none)
-  const worker = new Worker(LOCAL_WORKER);
+  // ---------- FORCE MVP via bundle discovery ----------
+  // Use official helper to find exact CDN URLs, then pick the MVP bundle (no COOP/COEP).
+  const bundles = duckdb.getJsDelivrBundles();
+  const mvp = bundles.find(b => /mvp/i.test(b.name));
+  if (!mvp) throw new Error("DuckDB MVP bundle not found");
+
+  // ---------- SAME-ORIGIN BLOB WORKER with locateFile ----------
+  // The MVP worker expects to resolve 'duckdb-mvp.wasm'. Set locateFile to the CDN dist dir.
+  const wasmDir = mvp.mainModule.substring(0, mvp.mainModule.lastIndexOf('/') + 1);
+  const workerBlobURL = URL.createObjectURL(new Blob([`
+    self.DUCKDB_CONFIG = { locateFile: (f) => ${JSON.stringify(wasmDir)} + f };
+    self.addEventListener('error', e => { try { self.postMessage({__duckdb_worker_error: String(e.message||e)}); } catch(_){} });
+    self.addEventListener('unhandledrejection', e => { try { self.postMessage({__duckdb_worker_error: 'unhandledrejection: ' + String(e.reason||e)}); } catch(_){} });
+    importScripts(${JSON.stringify(mvp.mainWorker)});
+  `], { type: "application/javascript" }));
+
+  const worker = new Worker(workerBlobURL);
+  worker.addEventListener('message', (e)=>{
+    if (e && e.data && e.data.__duckdb_worker_error) {
+      err("Worker inner error:", e.data.__duckdb_worker_error);
+    }
+  });
+  worker.addEventListener('error', (e)=>err("Worker event error:", e.message||e));
+
   const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-  await db.instantiate(MVP_WASM);  // point directly at CDN WASM
+
+  // Pass absolute WASM URL from the MVP bundle
+  await db.instantiate(mvp.mainModule /* no pthread in MVP */).catch(e=>{
+    err("instantiate failed:", e);
+    throw e;
+  });
+
   const conn = await db.connect();
 
-  await conn.query(`INSTALL httpfs; LOAD httpfs;`);
+  // ---------- HTTPFS (for remote parquet) ----------
+  await conn.query(`INSTALL httpfs; LOAD httpfs;`).catch(e=>{ err("httpfs load failed:", e); throw e; });
   await conn.query(`SET enable_http_metadata_cache=true; SET enable_object_cache=true;`);
 
-  // ===== Parquet file locations (switch to same-origin if you mirror them) =====
+  // ---------- DATA SOURCES ----------
+  // If you mirror these into your repo later, just swap to same-origin URLs.
   const PARQUET_URLS = [
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2018.parquet",
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2019.parquet",
@@ -102,7 +134,6 @@
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2023.parquet"
   ];
 
-  // LDC list
   const LDCs = new Set([
     'Afghanistan','Angola','Bangladesh','Benin','Bhutan','Burkina Faso','Burundi',
     'Cambodia','Central African Republic','Chad','Comoros','Democratic Republic of the Congo',
@@ -113,7 +144,6 @@
     'Togo','Tuvalu','Uganda','United Republic of Tanzania','Yemen','Zambia'
   ]);
 
-  // Helpers
   const toArray = (table) => {
     const cols = table.schema.fields.map(f => f.name), out=[];
     for (let i=0;i<table.numRows;i++){ const r={}; for (let c=0;c<cols.length;c++) r[cols[c]]=table.getChild(c).get(i); out.push(r); }
@@ -124,7 +154,7 @@
     arr.forEach((v,i)=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; if(i<pre) o.selected=true; sel.appendChild(o); });
   };
 
-  // Read multiple Parquet files
+  // ---------- PARQUET SCAN (use read_parquet([...])) ----------
   const fileListLiteral = `[${PARQUET_URLS.map(u => `'${u.replace(/'/g, "''")}'`).join(', ')}]`;
   await conn.query(`
     CREATE OR REPLACE VIEW crs AS
@@ -138,10 +168,10 @@
       CAST(climate_mitigation AS INT)  AS climate_mitigation
     FROM read_parquet(${fileListLiteral})
     WHERE usd_disbursement IS NOT NULL AND usd_disbursement > 0
-  `);
+  `).catch(e=>{ err("read_parquet() failed:", e); throw e; });
 
-  // Last-5-year window & LDC slice
-  const y = await conn.query(`SELECT min(year) AS miny, max(year) AS maxy FROM crs;`);
+  // ---------- last-5-year LDC slice ----------
+  const y = await conn.query(`SELECT min(year) AS miny, max(year) AS maxy FROM crs;`).catch(e=>{ err("min/max year failed:", e); throw e; });
   const { miny, maxy } = toArray(y)[0];
   const cutoff = maxy - 4;
   document.getElementById('yearsBadge').textContent = `${cutoff}–${maxy}`;
@@ -178,7 +208,7 @@
     FROM crs_ldc5_sectors
   `);
 
-  // Populate filters
+  // ---------- UI ----------
   const distinct = async (col) => toArray(await conn.query(`SELECT DISTINCT ${col} AS v FROM crs_final ORDER BY ${col};`)).map(r=>r.v);
   const countries = await distinct('Country');
   const donors    = await distinct('Donor');
@@ -190,13 +220,13 @@
   fillSelect('sectorSel', sectors, sectors.length);
   fillSelect('rioSel', rios, rios.length);
 
-  // Render
   const rowsBadge = document.getElementById('rowsBadge');
   const sumBadge  = document.getElementById('sumBadge');
 
   async function run(){
     const sv = id => [...document.getElementById(id).selectedOptions].map(o=>o.value.replaceAll("'", "''"));
     const cVals=sv('countrySel'), dVals=sv('donorSel'), sVals=sv('sectorSel'), rVals=sv('rioSel');
+    if(!cVals.length||!dVals.length||!sVals.length||!rVals.length){ return; }
 
     const where = `
       Country IN (${cVals.map(v=>`'${v}'`).join(",")})
