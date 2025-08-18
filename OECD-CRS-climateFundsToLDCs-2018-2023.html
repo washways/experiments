@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>OECD Expenditure Explorer (LDCs, last 5 years)</title>
+<title>OECD Expenditure Explorer — LDCs (2018–2023)</title>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="preconnect" href="https://cdn.plot.ly" crossorigin>
 <style>
   :root { --bg:#0b1020; --fg:#e8ebf2; --muted:#9aa3b2; --card:#141a2f; --accent:#6aa0ff; }
-  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Helvetica, Arial;}
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Helvetica,Arial;}
   header { padding:20px; border-bottom:1px solid #1e2746; }
   h1 { margin:0 0 8px 0; font-size:20px; }
   .sub { color:var(--muted); }
@@ -33,7 +33,7 @@
 <header>
   <h1>OECD Expenditure Explorer</h1>
   <div class="sub">
-    Explore OECD aid <b>disbursements</b> to <b>LDCs</b> over the <b>last 5 years</b>. Filter by Country, Donor, Sector, Climate tag.<br/>
+    OECD aid <b>disbursements</b> to <b>LDCs</b>, years <span id="yearsBadge">…</span>. Filter by Country, Donor, Sector, Climate tag.<br/>
     Chart shows flows: <b>Total → Donor → Climate → Sector</b>. Hover to see amounts in <b>M USD</b>.
   </div>
 </header>
@@ -41,7 +41,6 @@
 <main>
   <section class="panel" id="controls">
     <div class="kpi">
-      <span class="badge" id="yearsBadge">Years: …</span>
       <span class="badge" id="rowsBadge">Rows: …</span>
       <span class="badge" id="sumBadge">Total: … M USD</span>
     </div>
@@ -71,15 +70,14 @@
   </section>
 </main>
 
-<!-- Plotly -->
-<script src="https://cdn.plot.ly/plotly-2.32.0.min.js" defer></script>
-<!-- DuckDB-Wasm -->
-<script src="https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-browser-eh.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-wasm.js"></script>
-<script>
-(async function() {
-  // ===== 1) CONFIG: list your Parquet files for 2018..2023 on Hugging Face =====
-  // Make sure these files exist at those paths (case-sensitive).
+<!-- Plotly (global) -->
+<script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+
+<!-- App logic using DuckDB-Wasm ESM -->
+<script type="module">
+  import { AsyncDuckDB, selectBundle, ConsoleLogger } from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-esm.js";
+
+  // ===== Parquet files on Hugging Face (2018–2023). Edit if your names/paths differ.
   const PARQUET_URLS = [
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2018.parquet",
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2019.parquet",
@@ -89,7 +87,7 @@
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2023.parquet"
   ];
 
-  // ===== 2) LDC list =====
+  // ===== LDC list =====
   const LDCs = new Set([
     'Afghanistan','Angola','Bangladesh','Benin','Bhutan','Burkina Faso','Burundi',
     'Cambodia','Central African Republic','Chad','Comoros','Democratic Republic of the Congo',
@@ -100,8 +98,19 @@
     'Togo','Tuvalu','Uganda','United Republic of Tanzania','Yemen','Zambia'
   ]);
 
-  // ===== 3) DuckDB-Wasm init =====
-  const bundles = duckdb.selectBundle({
+  // ===== Helpers =====
+  const toArray = (table) => {
+    const cols = table.schema.fields.map(f => f.name), out=[];
+    for (let i=0;i<table.numRows;i++){ const r={}; for (let c=0;c<cols.length;c++) r[cols[c]]=table.getChild(c).get(i); out.push(r); }
+    return out;
+  };
+  const fillSelect = (id, arr, pre=10) => {
+    const sel=document.getElementById(id); sel.innerHTML="";
+    arr.forEach((v,i)=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; if(i<pre) o.selected=true; sel.appendChild(o); });
+  };
+
+  // ===== DuckDB-Wasm init (ESM) =====
+  const bundles = await selectBundle({
     mvp: {
       mainModule: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb.wasm",
       mainWorker: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-browser-mvp.worker.js"
@@ -111,18 +120,17 @@
       mainWorker: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-browser-eh.worker.js"
     }
   });
+
   const worker = new Worker(bundles.browserBuild.mainWorker);
-  const logger = new duckdb.ConsoleLogger();
-  const db = new duckdb.AsyncDuckDB(logger, worker);
+  const db = new AsyncDuckDB(new ConsoleLogger(), worker);
   await db.instantiate(bundles.browserBuild.mainModule, bundles.browserBuild.pthreadWorker);
   const conn = await db.connect();
 
   await conn.query(`INSTALL httpfs; LOAD httpfs;`);
   await conn.query(`SET enable_http_metadata_cache=true; SET enable_object_cache=true;`);
 
-  // ===== 4) Register Parquet URLs and create a unified view =====
+  // ===== Register Parquet URLs and create unified view =====
   const scans = PARQUET_URLS.map(u => `parquet_scan('${u}')`).join(', ');
-  // NOTE: Ensure your HF dataset allows CORS (it usually does). If a 403/404 occurs, check the URL spelling and permissions.
   await conn.query(`
     CREATE OR REPLACE VIEW crs AS
     SELECT
@@ -137,28 +145,15 @@
     WHERE usd_disbursement IS NOT NULL AND usd_disbursement > 0
   `);
 
-  // ===== 5) Compute latest year present and the 5-year window =====
-  const toArray = (table) => {
-    const cols = table.schema.fields.map(f => f.name);
-    const out = [];
-    for (let i = 0; i < table.numRows; i++) {
-      const row = {};
-      for (let c=0; c<cols.length; c++) row[cols[c]] = table.getChild(c).get(i);
-      out.push(row);
-    }
-    return out;
-  };
-  const y = await conn.query(`SELECT max(year) AS maxy FROM crs;`);
-  const latest_year = toArray(y)[0].maxy;
-  const cutoff = latest_year - 4;
+  // ===== Determine year window, then build LDC + last-5 view =====
+  const y = await conn.query(`SELECT min(year) AS miny, max(year) AS maxy FROM crs;`);
+  const { miny, maxy } = toArray(y)[0];
+  const cutoff = maxy - 4;
+  document.getElementById('yearsBadge').textContent = `${cutoff}–${maxy}`;
 
-  document.getElementById('yearsBadge').textContent = `Years: ${cutoff}–${latest_year}`;
-
-  // ===== 6) Build LDC + last-5 view with sector + rio marker buckets =====
   await conn.query(`
     CREATE OR REPLACE VIEW crs_ldc5 AS
-    SELECT *
-    FROM crs
+    SELECT * FROM crs
     WHERE year >= ${cutoff} AND Country IN (${[...LDCs].map(s=> `'${s.replace(/'/g,"''")}'`).join(',')})
   `);
 
@@ -188,39 +183,25 @@
     FROM crs_ldc5_sectors
   `);
 
-  // ===== 7) Populate filter options =====
-  async function distinct(col) {
-    return toArray(await conn.query(`SELECT DISTINCT ${col} AS v FROM crs_final ORDER BY ${col};`)).map(r => r.v);
-  }
+  // ===== Populate filter controls =====
+  const distinct = async (col) => toArray(await conn.query(`SELECT DISTINCT ${col} AS v FROM crs_final ORDER BY ${col};`)).map(r=>r.v);
   const countries = await distinct('Country');
-  const donors = await distinct('Donor');
-  const sectors = await distinct('Sector');
-  const rios = await distinct('RioMarker');
+  const donors    = await distinct('Donor');
+  const sectors   = await distinct('Sector');
+  const rios      = await distinct('RioMarker');
 
-  function fillSelect(selId, arr, pre=10) {
-    const sel = document.getElementById(selId);
-    sel.innerHTML = "";
-    arr.forEach((v,i) => {
-      const opt = document.createElement('option');
-      opt.value = v; opt.textContent = v; if (i < pre) opt.selected = true;
-      sel.appendChild(opt);
-    });
-  }
   fillSelect('countrySel', countries, Math.min(10, countries.length));
   fillSelect('donorSel', donors, Math.min(10, donors.length));
   fillSelect('sectorSel', sectors, sectors.length);
   fillSelect('rioSel', rios, rios.length);
 
-  // ===== 8) Render routine =====
+  // ===== Render routine =====
   const rowsBadge = document.getElementById('rowsBadge');
   const sumBadge  = document.getElementById('sumBadge');
 
-  async function run() {
-    const selVals = id => [...document.getElementById(id).selectedOptions].map(o => o.value.replaceAll("'", "''"));
-    const cVals = selVals('countrySel');
-    const dVals = selVals('donorSel');
-    const sVals = selVals('sectorSel');
-    const rVals = selVals('rioSel');
+  async function run(){
+    const sv = id => [...document.getElementById(id).selectedOptions].map(o=>o.value.replaceAll("'", "''"));
+    const cVals=sv('countrySel'), dVals=sv('donorSel'), sVals=sv('sectorSel'), rVals=sv('rioSel');
 
     const where = `
       Country IN (${cVals.map(v=>`'${v}'`).join(",")})
@@ -229,75 +210,59 @@
       AND RioMarker IN (${rVals.map(v=>`'${v}'`).join(",")})
     `;
 
-    const tableData = toArray(await conn.query(`
+    const tbl = toArray(await conn.query(`
       WITH f AS (SELECT * FROM crs_final WHERE ${where})
       SELECT Donor, RioMarker, Sector, SUM(usd_disbursement)/1e6 AS "USD (M)"
       FROM f GROUP BY ALL ORDER BY Donor, RioMarker, Sector;
     `));
-
-    rowsBadge.textContent = `Rows: ${tableData.length.toLocaleString()}`;
-    const total = tableData.reduce((a,r)=>a+(+r["USD (M)"]),0);
+    rowsBadge.textContent = `Rows: ${tbl.length.toLocaleString()}`;
+    const total = tbl.reduce((a,r)=>a+(+r["USD (M)"]),0);
     sumBadge.textContent = `Total: ${total.toFixed(2)} M USD`;
 
-    // Sankey links (in M USD)
+    // Sankey links (M USD)
     const labels = ["Total Aid"];
-    const idx = (label) => { let i = labels.indexOf(label); if (i===-1){labels.push(label); i=labels.length-1;} return i; };
-    const src = [], tgt = [], val = [];
+    const idx = (l)=>{ let i=labels.indexOf(l); if(i===-1){labels.push(l); i=labels.length-1;} return i; };
+    const src=[],tgt=[],val=[];
 
     const donorsLink = toArray(await conn.query(`
       WITH f AS (SELECT * FROM crs_final WHERE ${where})
       SELECT Donor, SUM(usd_disbursement)/1e6 AS v FROM f GROUP BY Donor;
     `));
-    donorsLink.forEach(r => { src.push(idx("Total Aid")); tgt.push(idx(r.Donor)); val.push(+r.v); });
+    donorsLink.forEach(r=>{ src.push(idx("Total Aid")); tgt.push(idx(r.Donor)); val.push(+r.v); });
 
     const donorRio = toArray(await conn.query(`
       WITH f AS (SELECT * FROM crs_final WHERE ${where})
       SELECT Donor, RioMarker, SUM(usd_disbursement)/1e6 AS v FROM f GROUP BY Donor,RioMarker;
     `));
-    donorRio.forEach(r => { src.push(idx(r.Donor)); tgt.push(idx(r.RioMarker)); val.push(+r.v); });
+    donorRio.forEach(r=>{ src.push(idx(r.Donor)); tgt.push(idx(r.RioMarker)); val.push(+r.v); });
 
     const rioSector = toArray(await conn.query(`
       WITH f AS (SELECT * FROM crs_final WHERE ${where})
       SELECT RioMarker, Sector, SUM(usd_disbursement)/1e6 AS v FROM f GROUP BY RioMarker,Sector;
     `));
-    rioSector.forEach(r => { src.push(idx(r.RioMarker)); tgt.push(idx(r.Sector)); val.push(+r.v); });
+    rioSector.forEach(r=>{ src.push(idx(r.RioMarker)); tgt.push(idx(r.Sector)); val.push(+r.v); });
 
-    const fig = {
-      data: [{
-        type: "sankey",
-        node: { label: labels, pad: 15, thickness: 20, hovertemplate: "%{label}<extra></extra>" },
-        link: { source: src, target: tgt, value: val, hovertemplate: "Flow: %{value:.2f} M USD<extra></extra>" }
-      }],
-      layout: { title: `Aid Flow (${cutoff}–${latest_year}): Total → Donor → Climate → Sector`, font: { size: 12 }, paper_bgcolor:"transparent", plot_bgcolor:"transparent", height: 640, margin:{t:40,l:10,r:10,b:10}}
-    };
-    Plotly.react("chart", fig.data, fig.layout);
+    Plotly.react("chart", [{
+      type:"sankey",
+      node:{ label:labels, pad:15, thickness:20, hovertemplate:"%{label}<extra></extra>" },
+      link:{ source:src, target:tgt, value:val, hovertemplate:"Flow: %{value:.2f} M USD<extra></extra>" }
+    }], { title:`Aid Flow (${cutoff}–${maxy}): Total → Donor → Climate → Sector`,
+          font:{size:12}, paper_bgcolor:"transparent", plot_bgcolor:"transparent",
+          height:640, margin:{t:40,l:10,r:10,b:10} });
 
-    // Render table
-    const tableDiv = document.getElementById('table');
-    tableDiv.innerHTML = "";
-    const tbl = document.createElement('table');
-    const thead = document.createElement('thead');
-    thead.innerHTML = "<tr><th>Donor</th><th>Climate</th><th>Sector</th><th>USD (M)</th></tr>";
-    tbl.appendChild(thead);
-    const tbody = document.createElement('tbody');
-    tableData.forEach(r => {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${r.Donor}</td><td>${r.RioMarker}</td><td>${r.Sector}</td><td>${(+r["USD (M)"]).toFixed(2)}</td>`;
-      tbody.appendChild(tr);
-    });
-    tbl.appendChild(tbody);
-    tableDiv.appendChild(tbl);
+    // Table render
+    const el=document.getElementById('table'); el.innerHTML="";
+    const t=document.createElement('table');
+    t.innerHTML = `<thead><tr><th>Donor</th><th>Climate</th><th>Sector</th><th>USD (M)</th></tr></thead>`;
+    const tb=document.createElement('tbody');
+    tbl.forEach(r=>{ const tr=document.createElement('tr'); tr.innerHTML = `<td>${r.Donor}</td><td>${r.RioMarker}</td><td>${r.Sector}</td><td>${(+r["USD (M)"]).toFixed(2)}</td>`; tb.appendChild(tr); });
+    t.appendChild(tb); el.appendChild(t);
   }
 
   document.getElementById('applyBtn').addEventListener('click', run);
-
-  // initial draw + simple change listeners (debounced)
   await run();
-  let t=null; const onSel = ()=>{ clearTimeout(t); t=setTimeout(run, 250); };
-  for (const id of ["countrySel","donorSel","sectorSel","rioSel"]) {
-    document.getElementById(id).addEventListener('change', onSel);
-  }
-})();
+  let t=null; const onSel=()=>{ clearTimeout(t); t=setTimeout(run,200); };
+  for (const id of ["countrySel","donorSel","sectorSel","rioSel"]) document.getElementById(id).addEventListener('change', onSel);
 </script>
 </body>
 </html>
