@@ -73,11 +73,36 @@
 <!-- Plotly -->
 <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 
-<!-- App logic using DuckDB-Wasm ESM with same-origin blob workers -->
+<!-- App logic: DuckDB-Wasm ESM + same-origin blob worker (MVP forced) -->
 <script type="module">
   import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
 
-  // ========== CONFIG ==========
+  // ----- Force MVP (no COOP/COEP needed) -----
+  const mvpBundle = {
+    mainWorker: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/duckdb-browser-mvp.worker.js",
+    mainModule: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/duckdb-mvp.wasm",
+    pthreadWorker: null
+  };
+
+  // Same-origin wrapper worker -> loads real worker from CDN
+  const mkBlobWorkerURL = (cdnUrl) => {
+    const code = `importScripts(${JSON.stringify(cdnUrl)});`;
+    return URL.createObjectURL(new Blob([code], { type: "application/javascript" }));
+  };
+  const mainWorkerURL = mkBlobWorkerURL(mvpBundle.mainWorker);
+
+  // ----- Init DuckDB (MVP) -----
+  const worker = new Worker(mainWorkerURL);
+  const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
+  await db.instantiate(mvpBundle.mainModule); // MVP: no pthread arg
+  const conn = await db.connect();
+
+  await conn.query(`INSTALL httpfs; LOAD httpfs;`);
+  await conn.query(`SET enable_http_metadata_cache=true; SET enable_object_cache=true;`);
+
+  // ===== Parquet file locations (HF or same-origin GitHub Pages) =====
+  // If you move files into your repo, switch to:
+  //  "https://washways.org/experiments/data/CRS_2018.parquet", etc.
   const PARQUET_URLS = [
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2018.parquet",
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2019.parquet",
@@ -87,6 +112,7 @@
     "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2023.parquet"
   ];
 
+  // LDCs
   const LDCs = new Set([
     'Afghanistan','Angola','Bangladesh','Benin','Bhutan','Burkina Faso','Burundi',
     'Cambodia','Central African Republic','Chad','Comoros','Democratic Republic of the Congo',
@@ -97,7 +123,7 @@
     'Togo','Tuvalu','Uganda','United Republic of Tanzania','Yemen','Zambia'
   ]);
 
-  // ========== HELPERS ==========
+  // Helpers
   const toArray = (table) => {
     const cols = table.schema.fields.map(f => f.name), out=[];
     for (let i=0;i<table.numRows;i++){ const r={}; for (let c=0;c<cols.length;c++) r[cols[c]]=table.getChild(c).get(i); out.push(r); }
@@ -108,32 +134,8 @@
     arr.forEach((v,i)=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; if(i<pre) o.selected=true; sel.appendChild(o); });
   };
 
-  // ========== BLOB WORKER WRAPPER ==========
-  // Workers must be same-origin. We generate tiny same-origin workers that load the real workers from the CDN via importScripts().
-  const mkBlobWorkerURL = (cdnUrl) => {
-    const blob = new Blob([`importScripts(${JSON.stringify(cdnUrl)});`], { type: "application/javascript" });
-    return URL.createObjectURL(blob);
-  };
-
-  // Ask DuckDB for correct CDN bundle URLs for this version
-  const bundles = duckdb.getJsDelivrBundles();
-  const bundle  = await duckdb.selectBundle(bundles); // prefers EH on capable browsers
-
-  // Create blob URLs for the main worker and (if present) pthread worker
-  const mainWorkerURL = mkBlobWorkerURL(bundle.mainWorker);
-  const pthreadWorkerURL = bundle.pthreadWorker ? mkBlobWorkerURL(bundle.pthreadWorker) : undefined;
-
-  // ========== INIT DUCKDB ==========
-  const worker = new Worker(mainWorkerURL);
-  const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-  await db.instantiate(bundle.mainModule, pthreadWorkerURL);
-  const conn = await db.connect();
-
-  await conn.query(`INSTALL httpfs; LOAD httpfs;`);
-  await conn.query(`SET enable_http_metadata_cache=true; SET enable_object_cache=true;`);
-
-  // ========== DATA MODEL ==========
-  const scans = PARQUET_URLS.map(u => `parquet_scan('${u}')`).join(', ');
+  // ===== Read multiple Parquet files (FIXED: use read_parquet([...])) =====
+  const fileListLiteral = `[${PARQUET_URLS.map(u => `'${u.replace(/'/g, "''")}'`).join(', ')}]`;
   await conn.query(`
     CREATE OR REPLACE VIEW crs AS
     SELECT
@@ -144,10 +146,11 @@
       CAST(usd_disbursement AS DOUBLE) AS usd_disbursement,
       CAST(climate_adaptation AS INT)  AS climate_adaptation,
       CAST(climate_mitigation AS INT)  AS climate_mitigation
-    FROM union_all(${scans})
+    FROM read_parquet(${fileListLiteral})
     WHERE usd_disbursement IS NOT NULL AND usd_disbursement > 0
   `);
 
+  // Last-5-year window & LDC slice
   const y = await conn.query(`SELECT min(year) AS miny, max(year) AS maxy FROM crs;`);
   const { miny, maxy } = toArray(y)[0];
   const cutoff = maxy - 4;
@@ -185,7 +188,7 @@
     FROM crs_ldc5_sectors
   `);
 
-  // ========== UI POPULATION ==========
+  // UI population
   const distinct = async (col) => toArray(await conn.query(`SELECT DISTINCT ${col} AS v FROM crs_final ORDER BY ${col};`)).map(r=>r.v);
   const countries = await distinct('Country');
   const donors    = await distinct('Donor');
@@ -197,7 +200,7 @@
   fillSelect('sectorSel', sectors, sectors.length);
   fillSelect('rioSel', rios, rios.length);
 
-  // ========== RENDER ==========
+  // Render
   const rowsBadge = document.getElementById('rowsBadge');
   const sumBadge  = document.getElementById('sumBadge');
 
@@ -221,7 +224,6 @@
     const total = tbl.reduce((a,r)=>a+(+r["USD (M)"]),0);
     sumBadge.textContent = `Total: ${total.toFixed(2)} M USD`;
 
-    // Sankey (M USD)
     const labels = ["Total Aid"];
     const idx = (l)=>{ let i=labels.indexOf(l); if(i===-1){labels.push(l); i=labels.length-1;} return i; };
     const src=[],tgt=[],val=[];
@@ -252,7 +254,6 @@
           font:{size:12}, paper_bgcolor:"transparent", plot_bgcolor:"transparent",
           height:640, margin:{t:40,l:10,r:10,b:10} });
 
-    // Table
     const el=document.getElementById('table'); el.innerHTML="";
     const t=document.createElement('table');
     t.innerHTML = `<thead><tr><th>Donor</th><th>Climate</th><th>Sector</th><th>USD (M)</th></tr></thead>`;
