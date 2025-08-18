@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>OECD Expenditure Explorer (LDCs, last 5 years)</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://cdn.plot.ly" crossorigin>
+<style>
+  :root { --bg:#0b1020; --fg:#e8ebf2; --muted:#9aa3b2; --card:#141a2f; --accent:#6aa0ff; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Helvetica, Arial;}
+  header { padding:20px; border-bottom:1px solid #1e2746; }
+  h1 { margin:0 0 8px 0; font-size:20px; }
+  .sub { color:var(--muted); }
+  main { display:grid; grid-template-columns: 320px 1fr; gap:16px; padding:16px; }
+  .panel { background:var(--card); border:1px solid #1e2746; border-radius:14px; padding:14px; }
+  label { display:block; margin-top:10px; color:#cbd3e3; font-weight:600; }
+  select { width:100%; min-height:84px; background:#0e1430; color:var(--fg); border:1px solid #2a3359; border-radius:10px; padding:6px; }
+  .kpi { display:flex; gap:16px; margin-top:8px; flex-wrap:wrap; }
+  .badge { padding:6px 10px; border-radius:999px; background:#0e1430; border:1px solid #263058; color:#cbd3e3; }
+  table { width:100%; border-collapse: collapse; margin-top:10px; }
+  th, td { padding:8px 10px; border-bottom:1px solid #1f2748; }
+  th { text-align:left; color:#cbd3e3; }
+  .footer { color:var(--muted); font-size:12px; margin-top:8px; }
+  .btn { display:inline-block; padding:8px 12px; border-radius:10px; border:1px solid #2a3359; background:#0f1736; color:#dbe4ff; text-decoration:none; cursor:pointer; }
+  .btn:disabled { opacity:.6; cursor:not-allowed; }
+  .row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .hint { color:#9aa3b2; font-size:12px; margin-top:6px;}
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>OECD Expenditure Explorer</h1>
+  <div class="sub">
+    Explore OECD aid <b>disbursements</b> to <b>LDCs</b> over the <b>last 5 years</b>. Filter by Country, Donor, Sector, Climate tag.<br/>
+    Chart shows flows: <b>Total → Donor → Climate → Sector</b>. Hover to see amounts in <b>M USD</b>.
+  </div>
+</header>
+
+<main>
+  <section class="panel" id="controls">
+    <div class="kpi">
+      <span class="badge" id="yearsBadge">Years: …</span>
+      <span class="badge" id="rowsBadge">Rows: …</span>
+      <span class="badge" id="sumBadge">Total: … M USD</span>
+    </div>
+
+    <label>Country (LDC) — hold Ctrl/Cmd to multi-select</label>
+    <select id="countrySel" multiple></select>
+    <label>Donor — hold Ctrl/Cmd to multi-select</label>
+    <select id="donorSel" multiple></select>
+    <label>Sector — hold Ctrl/Cmd to multi-select</label>
+    <select id="sectorSel" multiple></select>
+    <label>Climate tag (Rio marker)</label>
+    <select id="rioSel" multiple></select>
+
+    <div class="row" style="margin-top:10px;">
+      <button class="btn" id="applyBtn">Apply filters</button>
+      <span class="hint">Tip: start with fewer Countries/Donors for speed, then expand.</span>
+    </div>
+
+    <div class="footer">
+      Source: OECD DAC CRS. © OECD. Licensed under CC BY 4.0. Values shown in <b>M USD</b>.
+    </div>
+  </section>
+
+  <section class="panel">
+    <div id="chart" style="height:640px;"></div>
+    <div id="table"></div>
+  </section>
+</main>
+
+<!-- Plotly -->
+<script src="https://cdn.plot.ly/plotly-2.32.0.min.js" defer></script>
+<!-- DuckDB-Wasm -->
+<script src="https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-browser-eh.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-wasm.js"></script>
+<script>
+(async function() {
+  // ===== 1) CONFIG: list your Parquet files for 2018..2023 on Hugging Face =====
+  // Make sure these files exist at those paths (case-sensitive).
+  const PARQUET_URLS = [
+    "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2018.parquet",
+    "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2019.parquet",
+    "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2020.parquet",
+    "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2021.parquet",
+    "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2022.parquet",
+    "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2023.parquet"
+  ];
+
+  // ===== 2) LDC list =====
+  const LDCs = new Set([
+    'Afghanistan','Angola','Bangladesh','Benin','Bhutan','Burkina Faso','Burundi',
+    'Cambodia','Central African Republic','Chad','Comoros','Democratic Republic of the Congo',
+    'Djibouti','Eritrea','Ethiopia','Gambia','Guinea','Guinea-Bissau','Haiti','Kiribati',
+    "Lao People's Democratic Republic",'Lesotho','Liberia','Madagascar','Malawi','Mali',
+    'Mauritania','Mozambique','Myanmar','Nepal','Niger','Rwanda','Sao Tome and Principe',
+    'Senegal','Sierra Leone','Solomon Islands','Somalia','South Sudan','Sudan','Timor-Leste',
+    'Togo','Tuvalu','Uganda','United Republic of Tanzania','Yemen','Zambia'
+  ]);
+
+  // ===== 3) DuckDB-Wasm init =====
+  const bundles = duckdb.selectBundle({
+    mvp: {
+      mainModule: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb.wasm",
+      mainWorker: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-browser-mvp.worker.js"
+    },
+    eh: {
+      mainModule: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-eh.wasm",
+      mainWorker: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-browser-eh.worker.js"
+    }
+  });
+  const worker = new Worker(bundles.browserBuild.mainWorker);
+  const logger = new duckdb.ConsoleLogger();
+  const db = new duckdb.AsyncDuckDB(logger, worker);
+  await db.instantiate(bundles.browserBuild.mainModule, bundles.browserBuild.pthreadWorker);
+  const conn = await db.connect();
+
+  await conn.query(`INSTALL httpfs; LOAD httpfs;`);
+  await conn.query(`SET enable_http_metadata_cache=true; SET enable_object_cache=true;`);
+
+  // ===== 4) Register Parquet URLs and create a unified view =====
+  const scans = PARQUET_URLS.map(u => `parquet_scan('${u}')`).join(', ');
+  // NOTE: Ensure your HF dataset allows CORS (it usually does). If a 403/404 occurs, check the URL spelling and permissions.
+  await conn.query(`
+    CREATE OR REPLACE VIEW crs AS
+    SELECT
+      recipient_name::VARCHAR AS Country,
+      donor_name::VARCHAR      AS Donor,
+      purpose_code::VARCHAR    AS purpose_code,
+      CAST(year AS INT)        AS year,
+      CAST(usd_disbursement AS DOUBLE) AS usd_disbursement,
+      CAST(climate_adaptation AS INT)  AS climate_adaptation,
+      CAST(climate_mitigation AS INT)  AS climate_mitigation
+    FROM union_all(${scans})
+    WHERE usd_disbursement IS NOT NULL AND usd_disbursement > 0
+  `);
+
+  // ===== 5) Compute latest year present and the 5-year window =====
+  const toArray = (table) => {
+    const cols = table.schema.fields.map(f => f.name);
+    const out = [];
+    for (let i = 0; i < table.numRows; i++) {
+      const row = {};
+      for (let c=0; c<cols.length; c++) row[cols[c]] = table.getChild(c).get(i);
+      out.push(row);
+    }
+    return out;
+  };
+  const y = await conn.query(`SELECT max(year) AS maxy FROM crs;`);
+  const latest_year = toArray(y)[0].maxy;
+  const cutoff = latest_year - 4;
+
+  document.getElementById('yearsBadge').textContent = `Years: ${cutoff}–${latest_year}`;
+
+  // ===== 6) Build LDC + last-5 view with sector + rio marker buckets =====
+  await conn.query(`
+    CREATE OR REPLACE VIEW crs_ldc5 AS
+    SELECT *
+    FROM crs
+    WHERE year >= ${cutoff} AND Country IN (${[...LDCs].map(s=> `'${s.replace(/'/g,"''")}'`).join(',')})
+  `);
+
+  await conn.query(`
+    CREATE OR REPLACE VIEW crs_ldc5_sectors AS
+    SELECT
+      Country, Donor, year, usd_disbursement, purpose_code,
+      CASE
+        WHEN LEFT(CAST(purpose_code AS VARCHAR),3) IN ('110','120','130') THEN 'Social Services'
+        WHEN LEFT(CAST(purpose_code AS VARCHAR),3) IN ('140','150') THEN 'Water & Other Infra'
+        WHEN LEFT(CAST(purpose_code AS VARCHAR),3) IN ('210','220','230') THEN 'Economic Infrastructure'
+        WHEN LEFT(CAST(purpose_code AS VARCHAR),3) IN ('310','311','312','313','321','322','323','324') THEN 'Production Sectors'
+        WHEN LEFT(CAST(purpose_code AS VARCHAR),3) IN ('410','430') THEN 'Multi-sector / Cross-cutting'
+        WHEN LEFT(CAST(purpose_code AS VARCHAR),3) IN ('510','520') THEN 'Humanitarian Aid'
+        WHEN LEFT(CAST(purpose_code AS VARCHAR),3) IN ('600','700') THEN 'Debt/Admin/Refugees'
+        ELSE 'Other'
+      END AS Sector,
+      GREATEST(COALESCE(climate_adaptation,0), COALESCE(climate_mitigation,0)) AS rio_score
+    FROM crs_ldc5
+  `);
+
+  await conn.query(`
+    CREATE OR REPLACE VIEW crs_final AS
+    SELECT
+      Country, Donor, Sector, year, usd_disbursement,
+      CASE rio_score WHEN 2 THEN 'Principal' WHEN 1 THEN 'Significant' ELSE 'Not Tagged' END AS RioMarker
+    FROM crs_ldc5_sectors
+  `);
+
+  // ===== 7) Populate filter options =====
+  async function distinct(col) {
+    return toArray(await conn.query(`SELECT DISTINCT ${col} AS v FROM crs_final ORDER BY ${col};`)).map(r => r.v);
+  }
+  const countries = await distinct('Country');
+  const donors = await distinct('Donor');
+  const sectors = await distinct('Sector');
+  const rios = await distinct('RioMarker');
+
+  function fillSelect(selId, arr, pre=10) {
+    const sel = document.getElementById(selId);
+    sel.innerHTML = "";
+    arr.forEach((v,i) => {
+      const opt = document.createElement('option');
+      opt.value = v; opt.textContent = v; if (i < pre) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  }
+  fillSelect('countrySel', countries, Math.min(10, countries.length));
+  fillSelect('donorSel', donors, Math.min(10, donors.length));
+  fillSelect('sectorSel', sectors, sectors.length);
+  fillSelect('rioSel', rios, rios.length);
+
+  // ===== 8) Render routine =====
+  const rowsBadge = document.getElementById('rowsBadge');
+  const sumBadge  = document.getElementById('sumBadge');
+
+  async function run() {
+    const selVals = id => [...document.getElementById(id).selectedOptions].map(o => o.value.replaceAll("'", "''"));
+    const cVals = selVals('countrySel');
+    const dVals = selVals('donorSel');
+    const sVals = selVals('sectorSel');
+    const rVals = selVals('rioSel');
+
+    const where = `
+      Country IN (${cVals.map(v=>`'${v}'`).join(",")})
+      AND Donor IN (${dVals.map(v=>`'${v}'`).join(",")})
+      AND Sector IN (${sVals.map(v=>`'${v}'`).join(",")})
+      AND RioMarker IN (${rVals.map(v=>`'${v}'`).join(",")})
+    `;
+
+    const tableData = toArray(await conn.query(`
+      WITH f AS (SELECT * FROM crs_final WHERE ${where})
+      SELECT Donor, RioMarker, Sector, SUM(usd_disbursement)/1e6 AS "USD (M)"
+      FROM f GROUP BY ALL ORDER BY Donor, RioMarker, Sector;
+    `));
+
+    rowsBadge.textContent = `Rows: ${tableData.length.toLocaleString()}`;
+    const total = tableData.reduce((a,r)=>a+(+r["USD (M)"]),0);
+    sumBadge.textContent = `Total: ${total.toFixed(2)} M USD`;
+
+    // Sankey links (in M USD)
+    const labels = ["Total Aid"];
+    const idx = (label) => { let i = labels.indexOf(label); if (i===-1){labels.push(label); i=labels.length-1;} return i; };
+    const src = [], tgt = [], val = [];
+
+    const donorsLink = toArray(await conn.query(`
+      WITH f AS (SELECT * FROM crs_final WHERE ${where})
+      SELECT Donor, SUM(usd_disbursement)/1e6 AS v FROM f GROUP BY Donor;
+    `));
+    donorsLink.forEach(r => { src.push(idx("Total Aid")); tgt.push(idx(r.Donor)); val.push(+r.v); });
+
+    const donorRio = toArray(await conn.query(`
+      WITH f AS (SELECT * FROM crs_final WHERE ${where})
+      SELECT Donor, RioMarker, SUM(usd_disbursement)/1e6 AS v FROM f GROUP BY Donor,RioMarker;
+    `));
+    donorRio.forEach(r => { src.push(idx(r.Donor)); tgt.push(idx(r.RioMarker)); val.push(+r.v); });
+
+    const rioSector = toArray(await conn.query(`
+      WITH f AS (SELECT * FROM crs_final WHERE ${where})
+      SELECT RioMarker, Sector, SUM(usd_disbursement)/1e6 AS v FROM f GROUP BY RioMarker,Sector;
+    `));
+    rioSector.forEach(r => { src.push(idx(r.RioMarker)); tgt.push(idx(r.Sector)); val.push(+r.v); });
+
+    const fig = {
+      data: [{
+        type: "sankey",
+        node: { label: labels, pad: 15, thickness: 20, hovertemplate: "%{label}<extra></extra>" },
+        link: { source: src, target: tgt, value: val, hovertemplate: "Flow: %{value:.2f} M USD<extra></extra>" }
+      }],
+      layout: { title: `Aid Flow (${cutoff}–${latest_year}): Total → Donor → Climate → Sector`, font: { size: 12 }, paper_bgcolor:"transparent", plot_bgcolor:"transparent", height: 640, margin:{t:40,l:10,r:10,b:10}}
+    };
+    Plotly.react("chart", fig.data, fig.layout);
+
+    // Render table
+    const tableDiv = document.getElementById('table');
+    tableDiv.innerHTML = "";
+    const tbl = document.createElement('table');
+    const thead = document.createElement('thead');
+    thead.innerHTML = "<tr><th>Donor</th><th>Climate</th><th>Sector</th><th>USD (M)</th></tr>";
+    tbl.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    tableData.forEach(r => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${r.Donor}</td><td>${r.RioMarker}</td><td>${r.Sector}</td><td>${(+r["USD (M)"]).toFixed(2)}</td>`;
+      tbody.appendChild(tr);
+    });
+    tbl.appendChild(tbody);
+    tableDiv.appendChild(tbl);
+  }
+
+  document.getElementById('applyBtn').addEventListener('click', run);
+
+  // initial draw + simple change listeners (debounced)
+  await run();
+  let t=null; const onSel = ()=>{ clearTimeout(t); t=setTimeout(run, 250); };
+  for (const id of ["countrySel","donorSel","sectorSel","rioSel"]) {
+    document.getElementById(id).addEventListener('change', onSel);
+  }
+})();
+</script>
+</body>
+</html>
