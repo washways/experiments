@@ -1,5 +1,5 @@
 <!doctype html><meta charset="utf-8">
-<title>DuckDB Smoke Test</title>
+<title>DuckDB Smoke Test (inline worker)</title>
 <pre id="out" style="white-space:pre-wrap;font:13px/1.4 ui-monospace,monospace">boot…</pre>
 <script type="module">
   import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
@@ -17,7 +17,7 @@
     if (!res.ok) throw new Error("worker fetch " + res.status);
     const workerJS = await res.text();
 
-    // Prepend config so Emscripten resolves wasm & never tries extensions
+    // Inline the worker with config to disable extensions and point locateFile to CDN dist
     const workerSrc =
 `self.DUCKDB_CONFIG = {
   extensionRepository: "",
@@ -25,15 +25,14 @@
 };
 ` + workerJS;
 
-    const workerURL = URL.createObjectURL(new Blob([workerSrc], { type: "application/javascript" }));
-
     log("spin worker…");
+    const workerURL = URL.createObjectURL(new Blob([workerSrc], { type: "application/javascript" }));
     const worker = new Worker(workerURL);
     worker.onerror = (e)=> log("WORKER onerror:", e.message || e);
 
     log("instantiate wasm…", CDN_WASM);
     const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-    await db.instantiate(CDN_WASM);
+    await db.instantiate(CDN_WASM);     // MUST show a wasm fetch in Network
     log("instantiate ok");
 
     const conn = await db.connect();
