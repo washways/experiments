@@ -78,53 +78,59 @@
 <script type="module">
   import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
 
-  // ---- Local runtime files (must exist) ----
-  const LOCAL_BASE = "/experiments/vendor/duckdb/1.29.0/";
-  const WORKER_JS  = LOCAL_BASE + "duckdb-browser-mvp.worker.js";
-  const WASM_BIN   = LOCAL_BASE + "duckdb-mvp.wasm";
+  // ---------- Boot DuckDB via inline worker (no importScripts, no extensions) ----------
+  const DIST = "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/";
+  const CDN_WORKER = DIST + "duckdb-browser-mvp.worker.js?v=app4";
+  const CDN_WASM   = DIST + "duckdb-mvp.wasm?v=app4";
 
-  // ---- Kill extension autoloads & point locateFile at local WASM via a blob worker ----
-  const blobCode = `
-    self.DUCKDB_CONFIG = {
-      // Disable any network calls for extensions (no httpfs fetches)
-      extensionRepository: "",
-      // Ensure the worker resolves the wasm from our local directory
-      locateFile: (f) => ${JSON.stringify(LOCAL_BASE)} + f
-    };
-    importScripts(${JSON.stringify(WORKER_JS)});
-  `;
-  const workerUrl = URL.createObjectURL(new Blob([blobCode], { type: "application/javascript" }));
+  async function bootDuckDB() {
+    const js = await (await fetch(CDN_WORKER, { cache:"no-store", mode:"cors" })).text();
+    const src =
+`self.DUCKDB_CONFIG = {
+  extensionRepository: "",
+  locateFile: (f) => ${JSON.stringify(DIST)} + f + "?v=app4"
+};
+` + js;
+    const url = URL.createObjectURL(new Blob([src], { type: "application/javascript" }));
+    const worker = new Worker(url);
+    const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
+    await db.instantiate(CDN_WASM);
+    return db;
+  }
 
-  // ---- Minimal logging
   const err = (...a)=>console.error("[OECD-CRS]", ...a);
   window.addEventListener("error", e=>err("window error:", e.message));
   window.addEventListener("unhandledrejection", e=>err("unhandled rejection:", e.reason||e));
 
-  // ---- Init DuckDB (MVP) with our blob worker
-  const worker = new Worker(workerUrl);
-  const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-  await db.instantiate(WASM_BIN);   // same-origin wasm
+  const db = await bootDuckDB();
   const conn = await db.connect();
 
-  // ===== Register Parquet files (browser fetch → virtual FS); NO httpfs extension needed =====
+  // ---------- Register Parquet files (browser fetch → virtual FS); NO httpfs ----------
   const REMOTE_PARQUET = [
-    ["CRS_2018.parquet", "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2018.parquet"],
-    ["CRS_2019.parquet", "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2019.parquet"],
-    ["CRS_2020.parquet", "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2020.parquet"],
-    ["CRS_2021.parquet", "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2021.parquet"],
-    ["CRS_2022.parquet", "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2022.parquet"],
-    ["CRS_2023.parquet", "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2023.parquet"]
+    ["CRS_2018.parquet","https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2018.parquet"],
+    ["CRS_2019.parquet","https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2019.parquet"],
+    ["CRS_2020.parquet","https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2020.parquet"],
+    ["CRS_2021.parquet","https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2021.parquet"],
+    ["CRS_2022.parquet","https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2022.parquet"],
+    ["CRS_2023.parquet","https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2023.parquet"]
   ];
+  await Promise.all(REMOTE_PARQUET.map(([name, url]) =>
+    db.registerFileURL(name, url, { allowCrossOrigin:true, cache:true })
+  ));
+  const fileList = `[${REMOTE_PARQUET.map(([n])=>`'${n}'`).join(', ')}]`;
 
-  // Fetch & mount
-  await Promise.all(REMOTE_PARQUET.map(async ([name, url]) => {
-    await db.registerFileURL(name, url, { allowCrossOrigin: true, cache: true });
-  }));
+  // ---------- Helpers ----------
+  const toArray = (table) => {
+    const cols = table.schema.fields.map(f => f.name), out=[];
+    for (let i=0;i<table.numRows;i++){ const r={}; for (let c=0;c<cols.length;c++) r[cols[c]]=table.getChild(c).get(i); out.push(r); }
+    return out;
+  };
+  const fillSelect = (id, arr, pre=10) => {
+    const sel=document.getElementById(id); sel.innerHTML="";
+    arr.forEach((v,i)=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; if(i<pre) o.selected=true; sel.appendChild(o); });
+  };
 
-  // Build list for read_parquet
-  const fileList = `[${REMOTE_PARQUET.map(([name]) => `'${name}'`).join(', ')}]`;
-
-  // ===== Build views =====
+  // ---------- Build views ----------
   await conn.query(`
     CREATE OR REPLACE VIEW crs AS
     SELECT
@@ -139,13 +145,6 @@
     WHERE usd_disbursement IS NOT NULL AND usd_disbursement > 0
   `);
 
-  const toArray = (table) => {
-    const cols = table.schema.fields.map(f => f.name), out=[];
-    for (let i=0;i<table.numRows;i++){ const r={}; for (let c=0;c<cols.length;c++) r[cols[c]]=table.getChild(c).get(i); out.push(r); }
-    return out;
-  };
-
-  // 5-year window
   const y = await conn.query(`SELECT min(year) AS miny, max(year) AS maxy FROM crs;`);
   const { miny, maxy } = toArray(y)[0];
   const cutoff = maxy - 4;
@@ -193,22 +192,19 @@
     FROM crs_ldc5_sectors
   `);
 
-  // ===== UI =====
+  // ---------- Populate filters ----------
   const distinct = async (col) => toArray(await conn.query(`SELECT DISTINCT ${col} AS v FROM crs_final ORDER BY ${col};`)).map(r=>r.v);
   const countries = await distinct('Country');
   const donors    = await distinct('Donor');
   const sectors   = await distinct('Sector');
   const rios      = await distinct('RioMarker');
 
-  const fillSelect = (id, arr, pre=10) => {
-    const sel=document.getElementById(id); sel.innerHTML="";
-    arr.forEach((v,i)=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; if(i<pre) o.selected=true; sel.appendChild(o); });
-  };
   fillSelect('countrySel', countries, Math.min(10, countries.length));
   fillSelect('donorSel', donors, Math.min(10, donors.length));
   fillSelect('sectorSel', sectors, sectors.length);
   fillSelect('rioSel', rios, rios.length);
 
+  // ---------- Render ----------
   const rowsBadge = document.getElementById('rowsBadge');
   const sumBadge  = document.getElementById('sumBadge');
 
@@ -233,7 +229,7 @@
     const total = tbl.reduce((a,r)=>a+(+r["USD (M)"]),0);
     sumBadge.textContent = `Total: ${total.toFixed(2)} M USD`;
 
-    // Sankey
+    // Sankey data
     const labels = ["Total Aid"];
     const idx = (l)=>{ let i=labels.indexOf(l); if(i===-1){labels.push(l); i=labels.length-1;} return i; };
     const src=[],tgt=[],val=[];
@@ -280,4 +276,3 @@
 </script>
 </body>
 </html>
-
