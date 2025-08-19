@@ -82,55 +82,38 @@
   const MVP_WORKER_LOCAL = "/experiments/vendor/duckdb/1.29.0/duckdb-browser-mvp.worker.js";
   const MVP_WASM_LOCAL   = "/experiments/vendor/duckdb/1.29.0/duckdb-mvp.wasm";
 
-  // Minimal error logging
+  // Basic error logging
   const err = (...a)=>console.error("[OECD-CRS]", ...a);
   window.addEventListener("error", e=>err("window error:", e.message));
   window.addEventListener("unhandledrejection", e=>err("unhandled rejection:", e.reason||e));
 
-  // ---- Init DuckDB (MVP build) ----
+  // ---- Init DuckDB (MVP) ----
   const worker = new Worker(MVP_WORKER_LOCAL);
   const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-  await db.instantiate(MVP_WASM_LOCAL); // same-origin path, no locateFile needed
+  await db.instantiate(MVP_WASM_LOCAL);
   const conn = await db.connect();
 
-  // Remote parquet support
-  await conn.query(`INSTALL httpfs; LOAD httpfs;`);
-  await conn.query(`SET enable_http_metadata_cache=true; SET enable_object_cache=true;`);
-
-  // ===== Parquet locations (HF). You can mirror to same-origin later for speed. =====
-  const PARQUET_URLS = [
-    "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2018.parquet",
-    "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2019.parquet",
-    "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2020.parquet",
-    "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2021.parquet",
-    "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2022.parquet",
-    "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2023.parquet"
+  // ===== Register Parquet files (NO httpfs extension needed) =====
+  // Remote sources — you can mirror to same-origin later for speed.
+  const REMOTE_PARQUET = [
+    ["CRS_2018.parquet", "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2018.parquet"],
+    ["CRS_2019.parquet", "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2019.parquet"],
+    ["CRS_2020.parquet", "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2020.parquet"],
+    ["CRS_2021.parquet", "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2021.parquet"],
+    ["CRS_2022.parquet", "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2022.parquet"],
+    ["CRS_2023.parquet", "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2023.parquet"]
   ];
 
-  // LDC set
-  const LDCs = new Set([
-    'Afghanistan','Angola','Bangladesh','Benin','Bhutan','Burkina Faso','Burundi',
-    'Cambodia','Central African Republic','Chad','Comoros','Democratic Republic of the Congo',
-    'Djibouti','Eritrea','Ethiopia','Gambia','Guinea','Guinea-Bissau','Haiti','Kiribati',
-    "Lao People's Democratic Republic",'Lesotho','Liberia','Madagascar','Malawi','Mali',
-    'Mauritania','Mozambique','Myanmar','Nepal','Niger','Rwanda','Sao Tome and Principe',
-    'Senegal','Sierra Leone','Solomon Islands','Somalia','South Sudan','Sudan','Timor-Leste',
-    'Togo','Tuvalu','Uganda','United Republic of Tanzania','Yemen','Zambia'
-  ]);
+  // Download and mount each Parquet into DuckDB’s virtual FS
+  await Promise.all(REMOTE_PARQUET.map(async ([name, url]) => {
+    // allowCrossOrigin: true -> fetch via browser; duckdb caches it
+    await db.registerFileURL(name, url, { allowCrossOrigin: true, cache: true });
+  }));
 
-  // Helpers
-  const toArray = (table) => {
-    const cols = table.schema.fields.map(f => f.name), out=[];
-    for (let i=0;i<table.numRows;i++){ const r={}; for (let c=0;c<cols.length;c++) r[cols[c]]=table.getChild(c).get(i); out.push(r); }
-    return out;
-  };
-  const fillSelect = (id, arr, pre=10) => {
-    const sel=document.getElementById(id); sel.innerHTML="";
-    arr.forEach((v,i)=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; if(i<pre) o.selected=true; sel.appendChild(o); });
-  };
+  // Build the file list literal using the mounted filenames
+  const fileListLiteral = `[${REMOTE_PARQUET.map(([name]) => `'${name}'`).join(', ')}]`;
 
-  // Read multiple Parquet files (correct syntax)
-  const fileListLiteral = `[${PARQUET_URLS.map(u => `'${u.replace(/'/g, "''")}'`).join(', ')}]`;
+  // ===== Create base view from mounted Parquet files =====
   await conn.query(`
     CREATE OR REPLACE VIEW crs AS
     SELECT
@@ -145,11 +128,27 @@
     WHERE usd_disbursement IS NOT NULL AND usd_disbursement > 0
   `);
 
-  // Last-5-year window & LDC slice
+  // ===== Last-5-year window & LDC slice =====
+  const toArray = (table) => {
+    const cols = table.schema.fields.map(f => f.name), out=[];
+    for (let i=0;i<table.numRows;i++){ const r={}; for (let c=0;c<cols.length;c++) r[cols[c]]=table.getChild(c).get(i); out.push(r); }
+    return out;
+  };
+
   const y = await conn.query(`SELECT min(year) AS miny, max(year) AS maxy FROM crs;`);
   const { miny, maxy } = toArray(y)[0];
   const cutoff = maxy - 4;
   document.getElementById('yearsBadge').textContent = `${cutoff}–${maxy}`;
+
+  const LDCs = new Set([
+    'Afghanistan','Angola','Bangladesh','Benin','Bhutan','Burkina Faso','Burundi',
+    'Cambodia','Central African Republic','Chad','Comoros','Democratic Republic of the Congo',
+    'Djibouti','Eritrea','Ethiopia','Gambia','Guinea','Guinea-Bissau','Haiti','Kiribati',
+    "Lao People's Democratic Republic",'Lesotho','Liberia','Madagascar','Malawi','Mali',
+    'Mauritania','Mozambique','Myanmar','Nepal','Niger','Rwanda','Sao Tome and Principe',
+    'Senegal','Sierra Leone','Solomon Islands','Somalia','South Sudan','Sudan','Timor-Leste',
+    'Togo','Tuvalu','Uganda','United Republic of Tanzania','Yemen','Zambia'
+  ]);
 
   await conn.query(`
     CREATE OR REPLACE VIEW crs_ldc5 AS
@@ -183,19 +182,22 @@
     FROM crs_ldc5_sectors
   `);
 
-  // Populate filters
+  // ===== UI =====
   const distinct = async (col) => toArray(await conn.query(`SELECT DISTINCT ${col} AS v FROM crs_final ORDER BY ${col};`)).map(r=>r.v);
   const countries = await distinct('Country');
   const donors    = await distinct('Donor');
   const sectors   = await distinct('Sector');
   const rios      = await distinct('RioMarker');
 
+  const fillSelect = (id, arr, pre=10) => {
+    const sel=document.getElementById(id); sel.innerHTML="";
+    arr.forEach((v,i)=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; if(i<pre) o.selected=true; sel.appendChild(o); });
+  };
   fillSelect('countrySel', countries, Math.min(10, countries.length));
   fillSelect('donorSel', donors, Math.min(10, donors.length));
   fillSelect('sectorSel', sectors, sectors.length);
   fillSelect('rioSel', rios, rios.length);
 
-  // Render
   const rowsBadge = document.getElementById('rowsBadge');
   const sumBadge  = document.getElementById('sumBadge');
 
