@@ -1,12 +1,16 @@
-<!doctype html><meta charset="utf-8">
+<!doctype html>
+<meta charset="utf-8">
 <title>DuckDB Smoke Test (inline worker)</title>
 <pre id="out" style="white-space:pre-wrap;font:13px/1.4 ui-monospace,monospace">boot…</pre>
+
 <script type="module">
+  // Import the ESM shim for DuckDB-Wasm
   import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
 
   const out = document.getElementById('out');
-  const log = (...a)=>{ console.log("[SMOKE]", ...a); out.textContent += "\n" + a.join(" "); };
+  const log = (...a) => { console.log("[SMOKE]", ...a); out.textContent += "\n" + a.join(" "); };
 
+  // Use the MVP runtime from CDN, with cache-busters so you SEE requests in Network
   const DIST = "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/";
   const CDN_WORKER = DIST + "duckdb-browser-mvp.worker.js?v=smoke2";
   const CDN_WASM   = DIST + "duckdb-mvp.wasm?v=smoke2";
@@ -17,10 +21,11 @@
     if (!resJS.ok) throw new Error("worker fetch " + resJS.status);
     const workerJS = await resJS.text();
 
+    // Inline the worker so we avoid importScripts/CSP traps; also disable extensions, set locateFile
     const workerSrc =
 `self.DUCKDB_CONFIG = {
-  extensionRepository: "",
-  locateFile: (f) => ${JSON.stringify(DIST)} + f + "?v=smoke2"
+  extensionRepository: "",                               // no network extension fetches
+  locateFile: (f) => ${JSON.stringify(DIST)} + f + "?v=smoke2" // resolve wasm from CDN
 };
 ` + workerJS;
 
@@ -31,15 +36,16 @@
 
     log("instantiate wasm…", CDN_WASM);
     const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-    await db.instantiate(CDN_WASM);
+    await db.instantiate(CDN_WASM);       // should trigger a duckdb-mvp.wasm request (200)
     log("instantiate ok");
 
+    log("connect + SELECT 1…");
     const conn = await db.connect();
     const res1 = await conn.query("select 1 as ok");
 
-    // Arrow Table → read first col, first row
-    const val = res1.getChild(0).get(0);   // or: res1.getChild('ok').get(0)
-    log("query ok:", val);                 // should print 1
+    // Arrow Table access — read first row of column 'ok'
+    const val = res1.getChild('ok').get(0);  // or res1.getChild(0).get(0)
+    log("query ok:", val);                    // should print 1
     log("DONE");
   } catch (e) {
     log("ERROR:", e && e.message ? e.message : e);
