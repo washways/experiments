@@ -78,23 +78,35 @@
 <script type="module">
   import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
 
-  // ---- Same-origin Worker & WASM (must exist in your repo) ----
-  const MVP_WORKER_LOCAL = "/experiments/vendor/duckdb/1.29.0/duckdb-browser-mvp.worker.js";
-  const MVP_WASM_LOCAL   = "/experiments/vendor/duckdb/1.29.0/duckdb-mvp.wasm";
+  // ---- Local runtime files (must exist) ----
+  const LOCAL_BASE = "/experiments/vendor/duckdb/1.29.0/";
+  const WORKER_JS  = LOCAL_BASE + "duckdb-browser-mvp.worker.js";
+  const WASM_BIN   = LOCAL_BASE + "duckdb-mvp.wasm";
 
-  // Basic error logging
+  // ---- Kill extension autoloads & point locateFile at local WASM via a blob worker ----
+  const blobCode = `
+    self.DUCKDB_CONFIG = {
+      // Disable any network calls for extensions (no httpfs fetches)
+      extensionRepository: "",
+      // Ensure the worker resolves the wasm from our local directory
+      locateFile: (f) => ${JSON.stringify(LOCAL_BASE)} + f
+    };
+    importScripts(${JSON.stringify(WORKER_JS)});
+  `;
+  const workerUrl = URL.createObjectURL(new Blob([blobCode], { type: "application/javascript" }));
+
+  // ---- Minimal logging
   const err = (...a)=>console.error("[OECD-CRS]", ...a);
   window.addEventListener("error", e=>err("window error:", e.message));
   window.addEventListener("unhandledrejection", e=>err("unhandled rejection:", e.reason||e));
 
-  // ---- Init DuckDB (MVP) ----
-  const worker = new Worker(MVP_WORKER_LOCAL);
+  // ---- Init DuckDB (MVP) with our blob worker
+  const worker = new Worker(workerUrl);
   const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-  await db.instantiate(MVP_WASM_LOCAL);
+  await db.instantiate(WASM_BIN);   // same-origin wasm
   const conn = await db.connect();
 
-  // ===== Register Parquet files (NO httpfs extension needed) =====
-  // Remote sources — you can mirror to same-origin later for speed.
+  // ===== Register Parquet files (browser fetch → virtual FS); NO httpfs extension needed =====
   const REMOTE_PARQUET = [
     ["CRS_2018.parquet", "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2018.parquet"],
     ["CRS_2019.parquet", "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2019.parquet"],
@@ -104,16 +116,15 @@
     ["CRS_2023.parquet", "https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2023.parquet"]
   ];
 
-  // Download and mount each Parquet into DuckDB’s virtual FS
+  // Fetch & mount
   await Promise.all(REMOTE_PARQUET.map(async ([name, url]) => {
-    // allowCrossOrigin: true -> fetch via browser; duckdb caches it
     await db.registerFileURL(name, url, { allowCrossOrigin: true, cache: true });
   }));
 
-  // Build the file list literal using the mounted filenames
-  const fileListLiteral = `[${REMOTE_PARQUET.map(([name]) => `'${name}'`).join(', ')}]`;
+  // Build list for read_parquet
+  const fileList = `[${REMOTE_PARQUET.map(([name]) => `'${name}'`).join(', ')}]`;
 
-  // ===== Create base view from mounted Parquet files =====
+  // ===== Build views =====
   await conn.query(`
     CREATE OR REPLACE VIEW crs AS
     SELECT
@@ -124,17 +135,17 @@
       CAST(usd_disbursement AS DOUBLE) AS usd_disbursement,
       CAST(climate_adaptation AS INT)  AS climate_adaptation,
       CAST(climate_mitigation AS INT)  AS climate_mitigation
-    FROM read_parquet(${fileListLiteral})
+    FROM read_parquet(${fileList})
     WHERE usd_disbursement IS NOT NULL AND usd_disbursement > 0
   `);
 
-  // ===== Last-5-year window & LDC slice =====
   const toArray = (table) => {
     const cols = table.schema.fields.map(f => f.name), out=[];
     for (let i=0;i<table.numRows;i++){ const r={}; for (let c=0;c<cols.length;c++) r[cols[c]]=table.getChild(c).get(i); out.push(r); }
     return out;
   };
 
+  // 5-year window
   const y = await conn.query(`SELECT min(year) AS miny, max(year) AS maxy FROM crs;`);
   const { miny, maxy } = toArray(y)[0];
   const cutoff = maxy - 4;
@@ -269,3 +280,4 @@
 </script>
 </body>
 </html>
+
