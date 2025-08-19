@@ -1,0 +1,47 @@
+<!doctype html><meta charset="utf-8">
+<title>DuckDB Smoke Test</title>
+<pre id="out" style="white-space:pre-wrap;font:13px/1.4 ui-monospace,monospace">boot…</pre>
+<script type="module">
+  import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
+
+  const out = document.getElementById('out');
+  const log = (...a)=>{ console.log("[SMOKE]", ...a); out.textContent += "\n" + a.join(" "); };
+
+  // CDN dist (MVP) with cache-busters so Network shows fresh requests
+  const DIST = "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/";
+  const CDN_WORKER = DIST + "duckdb-browser-mvp.worker.js?v=smoke1";
+  const CDN_WASM   = DIST + "duckdb-mvp.wasm?v=smoke1";
+
+  // Blob worker that disables extensions and points locateFile to DIST
+  const boot = `
+    self.postMessage({boot:"start"});
+    self.DUCKDB_CONFIG = {
+      extensionRepository: "",            // hard-disable extension fetches
+      locateFile: (f) => ${JSON.stringify(DIST)} + f + "?v=smoke1"
+    };
+    self.postMessage({boot:"config", config: self.DUCKDB_CONFIG});
+    importScripts(${JSON.stringify(CDN_WORKER)});
+    self.postMessage({boot:"imported"});
+  `;
+  const blobURL = URL.createObjectURL(new Blob([boot], { type:"application/javascript" }));
+
+  log("create worker…");
+  const worker = new Worker(blobURL);
+  worker.onmessage = (e)=> log("worker msg:", JSON.stringify(e.data));
+
+  log("instantiate wasm…", CDN_WASM);
+  const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
+  try {
+    await db.instantiate(CDN_WASM);       // should fetch duckdb-mvp.wasm from CDN
+    log("instantiate ok");
+  } catch (e) {
+    log("instantiate ERROR:", e.message || e);
+    throw e;
+  }
+
+  log("connect + SELECT 1…");
+  const conn = await db.connect();
+  const res = await conn.query("select 1 as ok");
+  log("query ok:", res.get(0).get(0));
+  log("DONE");
+</script>
