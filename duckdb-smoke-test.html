@@ -13,11 +13,10 @@
 
   try {
     log("fetch worker js…", CDN_WORKER);
-    const res = await fetch(CDN_WORKER, { cache: "no-store", mode: "cors" });
-    if (!res.ok) throw new Error("worker fetch " + res.status);
-    const workerJS = await res.text();
+    const resJS = await fetch(CDN_WORKER, { cache: "no-store", mode: "cors" });
+    if (!resJS.ok) throw new Error("worker fetch " + resJS.status);
+    const workerJS = await resJS.text();
 
-    // Inline the worker with config to disable extensions and point locateFile to CDN dist
     const workerSrc =
 `self.DUCKDB_CONFIG = {
   extensionRepository: "",
@@ -32,12 +31,15 @@
 
     log("instantiate wasm…", CDN_WASM);
     const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-    await db.instantiate(CDN_WASM);     // MUST show a wasm fetch in Network
+    await db.instantiate(CDN_WASM);
     log("instantiate ok");
 
     const conn = await db.connect();
     const res1 = await conn.query("select 1 as ok");
-    log("query ok:", res1.get(0).get(0));
+
+    // Arrow Table → read first col, first row
+    const val = res1.getChild(0).get(0);   // or: res1.getChild('ok').get(0)
+    log("query ok:", val);                 // should print 1
     log("DONE");
   } catch (e) {
     log("ERROR:", e && e.message ? e.message : e);
