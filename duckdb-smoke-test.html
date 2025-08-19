@@ -7,41 +7,41 @@
   const out = document.getElementById('out');
   const log = (...a)=>{ console.log("[SMOKE]", ...a); out.textContent += "\n" + a.join(" "); };
 
-  // CDN dist (MVP) with cache-busters so Network shows fresh requests
   const DIST = "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/";
-  const CDN_WORKER = DIST + "duckdb-browser-mvp.worker.js?v=smoke1";
-  const CDN_WASM   = DIST + "duckdb-mvp.wasm?v=smoke1";
+  const CDN_WORKER = DIST + "duckdb-browser-mvp.worker.js?v=smoke2";
+  const CDN_WASM   = DIST + "duckdb-mvp.wasm?v=smoke2";
 
-  // Blob worker that disables extensions and points locateFile to DIST
-  const boot = `
-    self.postMessage({boot:"start"});
-    self.DUCKDB_CONFIG = {
-      extensionRepository: "",            // hard-disable extension fetches
-      locateFile: (f) => ${JSON.stringify(DIST)} + f + "?v=smoke1"
-    };
-    self.postMessage({boot:"config", config: self.DUCKDB_CONFIG});
-    importScripts(${JSON.stringify(CDN_WORKER)});
-    self.postMessage({boot:"imported"});
-  `;
-  const blobURL = URL.createObjectURL(new Blob([boot], { type:"application/javascript" }));
-
-  log("create worker…");
-  const worker = new Worker(blobURL);
-  worker.onmessage = (e)=> log("worker msg:", JSON.stringify(e.data));
-
-  log("instantiate wasm…", CDN_WASM);
-  const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
   try {
-    await db.instantiate(CDN_WASM);       // should fetch duckdb-mvp.wasm from CDN
-    log("instantiate ok");
-  } catch (e) {
-    log("instantiate ERROR:", e.message || e);
-    throw e;
-  }
+    log("fetch worker js…", CDN_WORKER);
+    const res = await fetch(CDN_WORKER, { cache: "no-store", mode: "cors" });
+    if (!res.ok) throw new Error("worker fetch " + res.status);
+    const workerJS = await res.text();
 
-  log("connect + SELECT 1…");
-  const conn = await db.connect();
-  const res = await conn.query("select 1 as ok");
-  log("query ok:", res.get(0).get(0));
-  log("DONE");
+    // Prepend config so Emscripten resolves wasm & never tries extensions
+    const workerSrc =
+`self.DUCKDB_CONFIG = {
+  extensionRepository: "",
+  locateFile: (f) => ${JSON.stringify(DIST)} + f + "?v=smoke2"
+};
+` + workerJS;
+
+    const workerURL = URL.createObjectURL(new Blob([workerSrc], { type: "application/javascript" }));
+
+    log("spin worker…");
+    const worker = new Worker(workerURL);
+    worker.onerror = (e)=> log("WORKER onerror:", e.message || e);
+
+    log("instantiate wasm…", CDN_WASM);
+    const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
+    await db.instantiate(CDN_WASM);
+    log("instantiate ok");
+
+    const conn = await db.connect();
+    const res1 = await conn.query("select 1 as ok");
+    log("query ok:", res1.get(0).get(0));
+    log("DONE");
+  } catch (e) {
+    log("ERROR:", e && e.message ? e.message : e);
+    console.error(e);
+  }
 </script>
