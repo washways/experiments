@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>OECD Expenditure Explorer — LDCs (2018–2023)</title>
 
+<!-- Inline favicon -->
 <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="%230b1020"/><circle cx="32" cy="32" r="18" fill="%236aa0ff"/></svg>'>
+
 <link rel="preconnect" href="https://cdn.plot.ly" crossorigin>
 <style>
   :root { --bg:#0b1020; --fg:#e8ebf2; --muted:#9aa3b2; --card:#141a2f; --accent:#6aa0ff; }
@@ -34,8 +36,9 @@
 <header>
   <h1>OECD Expenditure Explorer</h1>
   <div class="sub">
-    OECD aid <b>disbursements</b> to <b>LDCs</b>, years <span id="yearsBadge">…</span>. Filter by Country, Donor, Sector, Climate tag.<br/>
-    Chart shows flows: <b>Total → Donor → Climate → Sector</b>. Hover to see amounts in <b>M USD</b>.
+    OECD aid <b>disbursements</b> to <b>LDCs</b>, years <span id="yearsBadge">…</span>.<br/>
+    Filter by Country, Donor, Sector, Climate tag. Chart shows flows <b>Total → Donor → Climate → Sector</b>.<br/>
+    Hover to see amounts in <b>M USD</b>.
   </div>
 </header>
 
@@ -72,212 +75,124 @@
 </main>
 
 <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+<script>
+const DATA_URL = "/experiments/data/crs_ldc_2018_2023.json"; // <-- this file must exist in your repo
 
-<script type="module">
-  import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
+const rowsBadge = document.getElementById('rowsBadge');
+const sumBadge  = document.getElementById('sumBadge');
 
-  // ---------- DuckDB boot (INLINE worker; no importScripts) ----------
-  const DIST = "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/";
-  const CDN_WORKER = DIST + "duckdb-browser-mvp.worker.js?v=app5";
-  const CDN_WASM   = DIST + "duckdb-mvp.wasm?v=app5";
+let DATA = null;
 
-  async function bootDuckDB() {
-    // 1) Fetch worker JS as text
-    const res = await fetch(CDN_WORKER, { cache:"no-store", mode:"cors" });
-    if (!res.ok) throw new Error("worker fetch " + res.status);
-    const workerJS = await res.text();
+function fillSelect(id, arr, pre=10){
+  const sel = document.getElementById(id); sel.innerHTML="";
+  arr.forEach((v,i)=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; if(i<pre) o.selected=true; sel.appendChild(o); });
+}
 
-    // 2) Inline it with config (disable extensions; resolve wasm via CDN)
-    const workerSrc =
-`self.DUCKDB_CONFIG = {
-  extensionRepository: "",
-  locateFile: (f) => ${JSON.stringify(DIST)} + f + "?v=app5"
-};
-` + workerJS;
+function getSel(id){
+  return [...document.getElementById(id).selectedOptions].map(o=>o.value);
+}
 
-    // 3) Spin worker from a blob — NO importScripts calls anywhere
-    const workerURL = URL.createObjectURL(new Blob([workerSrc], { type: "application/javascript" }));
-    const worker = new Worker(workerURL);
+function human(n){ return (+n).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}); }
 
-    // 4) Instantiate wasm
-    const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-    await db.instantiate(CDN_WASM);
-    return db;
+async function main(){
+  const resp = await fetch(DATA_URL, {cache:"no-store"});
+  if(!resp.ok){ throw new Error("Failed to load data: "+resp.status); }
+  DATA = await resp.json();
+
+  document.getElementById('yearsBadge').textContent = `${DATA.meta.years[0]}–${DATA.meta.years[1]}`;
+
+  fillSelect('countrySel', DATA.distinct.countries, Math.min(10, DATA.distinct.countries.length));
+  fillSelect('donorSel', DATA.distinct.donors, Math.min(10, DATA.distinct.donors.length));
+  fillSelect('sectorSel', DATA.distinct.sectors, DATA.distinct.sectors.length);
+  fillSelect('rioSel', DATA.distinct.rios, DATA.distinct.rios.length);
+
+  document.getElementById('applyBtn').addEventListener('click', render);
+  ["countrySel","donorSel","sectorSel","rioSel"].forEach(id=>{
+    document.getElementById(id).addEventListener('change', ()=>{ clearTimeout(window.__t); window.__t=setTimeout(render,200); });
+  });
+
+  render();
+}
+
+function render(){
+  const c = new Set(getSel('countrySel'));
+  const d = new Set(getSel('donorSel'));
+  const s = new Set(getSel('sectorSel'));
+  const r = new Set(getSel('rioSel'));
+
+  const filtered = DATA.records.filter(row =>
+    c.has(row.Country) && d.has(row.Donor) && s.has(row.Sector) && r.has(row.RioMarker)
+  );
+
+  rowsBadge.textContent = `Rows: ${filtered.length.toLocaleString()}`;
+  const totalM = filtered.reduce((a,x)=>a + (+x.usd_m), 0);
+  sumBadge.textContent = `Total: ${human(totalM)} M USD`;
+
+  // Build Sankey arrays  (Total → Donor → Rio → Sector)
+  const labels = ["Total Aid"];
+  const mapIdx = (lab)=>{ let i=labels.indexOf(lab); if(i===-1){labels.push(lab); i=labels.length-1;} return i; };
+  const src=[], tgt=[], val=[];
+
+  // Donor totals
+  const byDonor = new Map();
+  filtered.forEach(r=> byDonor.set(r.Donor, (byDonor.get(r.Donor)||0) + r.usd_m));
+  for (const [donor,v] of byDonor) { src.push(mapIdx("Total Aid")); tgt.push(mapIdx(donor)); val.push(v); }
+
+  // Donor → Rio
+  const byDonorRio = new Map(); // key: donor|rio
+  filtered.forEach(r=>{
+    const k = r.Donor + "|" + r.RioMarker;
+    byDonorRio.set(k, (byDonorRio.get(k)||0) + r.usd_m);
+  });
+  for (const [k,v] of byDonorRio){
+    const [donor,rio] = k.split("|");
+    src.push(mapIdx(donor)); tgt.push(mapIdx(rio)); val.push(v);
   }
 
-  const err = (...a)=>console.error("[OECD-CRS]", ...a);
-  window.addEventListener("error", e=>err("window error:", e.message));
-  window.addEventListener("unhandledrejection", e=>err("unhandledrejection:", e.reason||e));
-
-  const db = await bootDuckDB();
-  const conn = await db.connect();
-
-  // ---------- Register Parquet files (browser fetch → virtual FS); NO httpfs ----------
-  const REMOTE_PARQUET = [
-    ["CRS_2018.parquet","https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2018.parquet"],
-    ["CRS_2019.parquet","https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2019.parquet"],
-    ["CRS_2020.parquet","https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2020.parquet"],
-    ["CRS_2021.parquet","https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2021.parquet"],
-    ["CRS_2022.parquet","https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2022.parquet"],
-    ["CRS_2023.parquet","https://huggingface.co/datasets/wash/OECD-CRS-data/resolve/main/CRS_2023.parquet"]
-  ];
-  await Promise.all(REMOTE_PARQUET.map(([name, url]) =>
-    db.registerFileURL(name, url, { allowCrossOrigin:true, cache:true })
-  ));
-  const fileList = `[${REMOTE_PARQUET.map(([n])=>`'${n}'`).join(', ')}]`;
-
-  // ---------- Helpers ----------
-  const toArray = (table) => {
-    const cols = table.schema.fields.map(f => f.name), out=[];
-    for (let i=0;i<table.numRows;i++){ const r={}; for (let c=0;c<cols.length;c++) r[cols[c]]=table.getChild(c).get(i); out.push(r); }
-    return out;
-  };
-  const fillSelect = (id, arr, pre=10) => {
-    const sel=document.getElementById(id); sel.innerHTML="";
-    arr.forEach((v,i)=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; if(i<pre) o.selected=true; sel.appendChild(o); });
-  };
-
-  // ---------- Build views ----------
-  await conn.query(`
-    CREATE OR REPLACE VIEW crs AS
-    SELECT
-      recipient_name::VARCHAR AS Country,
-      donor_name::VARCHAR      AS Donor,
-      purpose_code::VARCHAR    AS purpose_code,
-      CAST(year AS INT)        AS year,
-      CAST(usd_disbursement AS DOUBLE) AS usd_disbursement,
-      CAST(climate_adaptation AS INT)  AS climate_adaptation,
-      CAST(climate_mitigation AS INT)  AS climate_mitigation
-    FROM read_parquet(${fileList})
-    WHERE usd_disbursement IS NOT NULL AND usd_disbursement > 0
-  `);
-
-  const y = await conn.query(`SELECT min(year) AS miny, max(year) AS maxy FROM crs;`);
-  const { miny, maxy } = toArray(y)[0];
-  const cutoff = maxy - 4;
-  document.getElementById('yearsBadge').textContent = `${cutoff}–${maxy}`;
-
-  const LDCs = new Set([
-    'Afghanistan','Angola','Bangladesh','Benin','Bhutan','Burkina Faso','Burundi',
-    'Cambodia','Central African Republic','Chad','Comoros','Democratic Republic of the Congo',
-    'Djibouti','Eritrea','Ethiopia','Gambia','Guinea','Guinea-Bissau','Haiti','Kiribati',
-    "Lao People's Democratic Republic",'Lesotho','Liberia','Madagascar','Malawi','Mali',
-    'Mauritania','Mozambique','Myanmar','Nepal','Niger','Rwanda','Sao Tome and Principe',
-    'Senegal','Sierra Leone','Solomon Islands','Somalia','South Sudan','Sudan','Timor-Leste',
-    'Togo','Tuvalu','Uganda','United Republic of Tanzania','Yemen','Zambia'
-  ]);
-
-  await conn.query(`
-    CREATE OR REPLACE VIEW crs_ldc5 AS
-    SELECT * FROM crs
-    WHERE year >= ${cutoff} AND Country IN (${[...LDCs].map(s=> `'${s.replace(/'/g,"''")}'`).join(',')})
-  `);
-
-  await conn.query(`
-    CREATE OR REPLACE VIEW crs_ldc5_sectors AS
-    SELECT
-      Country, Donor, year, usd_disbursement, purpose_code,
-      CASE
-        WHEN LEFT(CAST(purpose_code AS VARCHAR),3) IN ('110','120','130') THEN 'Social Services'
-        WHEN LEFT(CAST(purpose_code AS VARCHAR),3) IN ('140','150') THEN 'Water & Other Infra'
-        WHEN LEFT(CAST(purpose_code AS VARCHAR),3) IN ('210','220','230') THEN 'Economic Infrastructure'
-        WHEN LEFT(CAST(purpose_code AS VARCHAR),3) IN ('310','311','312','313','321','322','323','324') THEN 'Production Sectors'
-        WHEN LEFT(CAST(purpose_code AS VARCHAR),3) IN ('410','430') THEN 'Multi-sector / Cross-cutting'
-        WHEN LEFT(CAST(purpose_code AS VARCHAR),3) IN ('510','520') THEN 'Humanitarian Aid'
-        WHEN LEFT(CAST(purpose_code AS VARCHAR),3) IN ('600','700') THEN 'Debt/Admin/Refugees'
-        ELSE 'Other'
-      END AS Sector,
-      GREATEST(COALESCE(climate_adaptation,0), COALESCE(climate_mitigation,0)) AS rio_score
-    FROM crs_ldc5
-  `);
-
-  await conn.query(`
-    CREATE OR REPLACE VIEW crs_final AS
-    SELECT
-      Country, Donor, Sector, year, usd_disbursement,
-      CASE rio_score WHEN 2 THEN 'Principal' WHEN 1 THEN 'Significant' ELSE 'Not Tagged' END AS RioMarker
-    FROM crs_ldc5_sectors
-  `);
-
-  // ---------- Populate filters ----------
-  const distinct = async (col) => toArray(await conn.query(`SELECT DISTINCT ${col} AS v FROM crs_final ORDER BY ${col};`)).map(r=>r.v);
-  const countries = await distinct('Country');
-  const donors    = await distinct('Donor');
-  const sectors   = await distinct('Sector');
-  const rios      = await distinct('RioMarker');
-
-  fillSelect('countrySel', countries, Math.min(10, countries.length));
-  fillSelect('donorSel', donors, Math.min(10, donors.length));
-  fillSelect('sectorSel', sectors, sectors.length);
-  fillSelect('rioSel', rios, rios.length);
-
-  // ---------- Render ----------
-  const rowsBadge = document.getElementById('rowsBadge');
-  const sumBadge  = document.getElementById('sumBadge');
-
-  async function run(){
-    const sv = id => [...document.getElementById(id).selectedOptions].map(o=>o.value.replaceAll("'", "''"));
-    const cVals=sv('countrySel'), dVals=sv('donorSel'), sVals=sv('sectorSel'), rVals=sv('rioSel');
-    if(!cVals.length||!dVals.length||!sVals.length||!rVals.length){ return; }
-
-    const where = `
-      Country IN (${cVals.map(v=>`'${v}'`).join(",")})
-      AND Donor IN (${dVals.map(v=>`'${v}'`).join(",")})
-      AND Sector IN (${sVals.map(v=>`'${v}'`).join(",")})
-      AND RioMarker IN (${rVals.map(v=>`'${v}'`).join(",")})
-    `;
-
-    const tbl = toArray(await conn.query(`
-      WITH f AS (SELECT * FROM crs_final WHERE ${where})
-      SELECT Donor, RioMarker, Sector, SUM(usd_disbursement)/1e6 AS "USD (M)"
-      FROM f GROUP BY ALL ORDER BY Donor, RioMarker, Sector;
-    `));
-    rowsBadge.textContent = `Rows: ${tbl.length.toLocaleString()}`;
-    const total = tbl.reduce((a,r)=>a+(+r["USD (M)"]),0);
-    sumBadge.textContent = `Total: ${total.toFixed(2)} M USD`;
-
-    const labels = ["Total Aid"];
-    const idx = (l)=>{ let i=labels.indexOf(l); if(i===-1){labels.push(l); i=labels.length-1;} return i; };
-    const src=[],tgt=[],val=[];
-
-    const donorsLink = toArray(await conn.query(`
-      WITH f AS (SELECT * FROM crs_final WHERE ${where})
-      SELECT Donor, SUM(usd_disbursement)/1e6 AS v FROM f GROUP BY Donor;
-    `));
-    donorsLink.forEach(r=>{ src.push(idx("Total Aid")); tgt.push(idx(r.Donor)); val.push(+r.v); });
-
-    const donorRio = toArray(await conn.query(`
-      WITH f AS (SELECT * FROM crs_final WHERE ${where})
-      SELECT Donor, RioMarker, SUM(usd_disbursement)/1e6 AS v FROM f GROUP BY Donor,RioMarker;
-    `));
-    donorRio.forEach(r=>{ src.push(idx(r.Donor)); tgt.push(idx(r.RioMarker)); val.push(+r.v); });
-
-    const rioSector = toArray(await conn.query(`
-      WITH f AS (SELECT * FROM crs_final WHERE ${where})
-      SELECT RioMarker, Sector, SUM(usd_disbursement)/1e6 AS v FROM f GROUP BY RioMarker,Sector;
-    `));
-    rioSector.forEach(r=>{ src.push(idx(r.RioMarker)); tgt.push(idx(r.Sector)); val.push(+r.v); });
-
-    Plotly.react("chart", [{
-      type:"sankey",
-      node:{ label:labels, pad:15, thickness:20, hovertemplate:"%{label}<extra></extra>" },
-      link:{ source:src, target:tgt, value:val, hovertemplate:"Flow: %{value:.2f} M USD<extra></extra>" }
-    }], { title:`Aid Flow (${cutoff}–${maxy}): Total → Donor → Climate → Sector`,
-          font:{size:12}, paper_bgcolor:"transparent", plot_bgcolor:"transparent",
-          height:640, margin:{t:40,l:10,r:10,b:10} });
-
-    const el=document.getElementById('table'); el.innerHTML="";
-    const t=document.createElement('table');
-    t.innerHTML = `<thead><tr><th>Donor</th><th>Climate</th><th>Sector</th><th>USD (M)</th></tr></thead>`;
-    const tb=document.createElement('tbody');
-    tbl.forEach(r=>{ const tr=document.createElement('tr'); tr.innerHTML = `<td>${r.Donor}</td><td>${r.RioMarker}</td><td>${r.Sector}</td><td>${(+r["USD (M)"]).toFixed(2)}</td>`; tb.appendChild(tr); });
-    t.appendChild(tb); el.appendChild(t);
+  // Rio → Sector
+  const byRioSector = new Map();
+  filtered.forEach(r=>{
+    const k = r.RioMarker + "|" + r.Sector;
+    byRioSector.set(k, (byRioSector.get(k)||0) + r.usd_m);
+  });
+  for (const [k,v] of byRioSector){
+    const [rio,sector] = k.split("|");
+    src.push(mapIdx(rio)); tgt.push(mapIdx(sector)); val.push(v);
   }
 
-  document.getElementById('applyBtn').addEventListener('click', run);
-  await run();
-  let t=null; const onSel=()=>{ clearTimeout(t); t=setTimeout(run,200); };
-  for (const id of ["countrySel","donorSel","sectorSel","rioSel"]) document.getElementById(id).addEventListener('change', onSel);
+  Plotly.react("chart", [{
+    type:"sankey",
+    node:{ label:labels, pad:15, thickness:20, hovertemplate:"%{label}<extra></extra>" },
+    link:{ source:src, target:tgt, value:val, hovertemplate:"Flow: %{value:.2f} M USD<extra></extra>" }
+  }], { title:`Aid Flow (${DATA.meta.years[0]}–${DATA.meta.years[1]}): Total → Donor → Climate → Sector`,
+        font:{size:12}, paper_bgcolor:"transparent", plot_bgcolor:"transparent",
+        height:640, margin:{t:40,l:10,r:10,b:10} });
+
+  // Table
+  const el=document.getElementById('table'); el.innerHTML="";
+  const t=document.createElement('table');
+  t.innerHTML = `<thead><tr><th>Donor</th><th>Climate</th><th>Sector</th><th>USD (M)</th></tr></thead>`;
+  const tb=document.createElement('tbody');
+
+  // Donor,Rio,Sector rollup for the table
+  const key = (r)=> r.Donor+"|"+r.RioMarker+"|"+r.Sector;
+  const agg = new Map();
+  filtered.forEach(r=> agg.set(key(r), (agg.get(key(r))||0)+r.usd_m));
+  const rows = [...agg.entries()].map(([k,v])=>{ const [Donor,RioMarker,Sector] = k.split("|"); return {Donor,RioMarker,Sector,usd_m:v}; })
+                                 .sort((a,b)=> a.Donor.localeCompare(b.Donor) || a.RioMarker.localeCompare(b.RioMarker) || a.Sector.localeCompare(b.Sector));
+
+  rows.forEach(r=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML = `<td>${r.Donor}</td><td>${r.RioMarker}</td><td>${r.Sector}</td><td>${human(r.usd_m)}</td>`;
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb); el.appendChild(t);
+}
+
+main().catch(err=>{
+  console.error(err);
+  alert("Failed to load data: "+err.message);
+});
 </script>
 </body>
 </html>
