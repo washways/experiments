@@ -5,9 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>OECD Expenditure Explorer — LDCs (2018–2023)</title>
 
-<!-- Inline favicon to silence /favicon.ico 404 -->
 <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="%230b1020"/><circle cx="32" cy="32" r="18" fill="%236aa0ff"/></svg>'>
-
 <link rel="preconnect" href="https://cdn.plot.ly" crossorigin>
 <style>
   :root { --bg:#0b1020; --fg:#e8ebf2; --muted:#9aa3b2; --card:#141a2f; --accent:#6aa0ff; }
@@ -78,21 +76,30 @@
 <script type="module">
   import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
 
-  // ---------- Boot DuckDB via inline worker (no importScripts, no extensions) ----------
+  // ---------- DuckDB boot (INLINE worker; no importScripts) ----------
   const DIST = "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/";
-  const CDN_WORKER = DIST + "duckdb-browser-mvp.worker.js?v=app4";
-  const CDN_WASM   = DIST + "duckdb-mvp.wasm?v=app4";
+  const CDN_WORKER = DIST + "duckdb-browser-mvp.worker.js?v=app5";
+  const CDN_WASM   = DIST + "duckdb-mvp.wasm?v=app5";
 
   async function bootDuckDB() {
-    const js = await (await fetch(CDN_WORKER, { cache:"no-store", mode:"cors" })).text();
-    const src =
+    // 1) Fetch worker JS as text
+    const res = await fetch(CDN_WORKER, { cache:"no-store", mode:"cors" });
+    if (!res.ok) throw new Error("worker fetch " + res.status);
+    const workerJS = await res.text();
+
+    // 2) Inline it with config (disable extensions; resolve wasm via CDN)
+    const workerSrc =
 `self.DUCKDB_CONFIG = {
   extensionRepository: "",
-  locateFile: (f) => ${JSON.stringify(DIST)} + f + "?v=app4"
+  locateFile: (f) => ${JSON.stringify(DIST)} + f + "?v=app5"
 };
-` + js;
-    const url = URL.createObjectURL(new Blob([src], { type: "application/javascript" }));
-    const worker = new Worker(url);
+` + workerJS;
+
+    // 3) Spin worker from a blob — NO importScripts calls anywhere
+    const workerURL = URL.createObjectURL(new Blob([workerSrc], { type: "application/javascript" }));
+    const worker = new Worker(workerURL);
+
+    // 4) Instantiate wasm
     const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
     await db.instantiate(CDN_WASM);
     return db;
@@ -100,7 +107,7 @@
 
   const err = (...a)=>console.error("[OECD-CRS]", ...a);
   window.addEventListener("error", e=>err("window error:", e.message));
-  window.addEventListener("unhandledrejection", e=>err("unhandled rejection:", e.reason||e));
+  window.addEventListener("unhandledrejection", e=>err("unhandledrejection:", e.reason||e));
 
   const db = await bootDuckDB();
   const conn = await db.connect();
@@ -229,7 +236,6 @@
     const total = tbl.reduce((a,r)=>a+(+r["USD (M)"]),0);
     sumBadge.textContent = `Total: ${total.toFixed(2)} M USD`;
 
-    // Sankey data
     const labels = ["Total Aid"];
     const idx = (l)=>{ let i=labels.indexOf(l); if(i===-1){labels.push(l); i=labels.length-1;} return i; };
     const src=[],tgt=[],val=[];
@@ -260,7 +266,6 @@
           font:{size:12}, paper_bgcolor:"transparent", plot_bgcolor:"transparent",
           height:640, margin:{t:40,l:10,r:10,b:10} });
 
-    // Table
     const el=document.getElementById('table'); el.innerHTML="";
     const t=document.createElement('table');
     t.innerHTML = `<thead><tr><th>Donor</th><th>Climate</th><th>Sector</th><th>USD (M)</th></tr></thead>`;
