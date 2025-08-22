@@ -8,33 +8,38 @@
 <!-- UNICEF blue theme -->
 <style>
   :root {
-    --unicef:#1CABE2; /* UNICEF blue */
-    --bg:#ffffff;
-    --fg:#0b1726;
-    --muted:#4a5a73;
-    --card:#f5f8fb;
-    --border:#d9e3ef;
+    --unicef:#1CABE2;
+    --bg:#ffffff; --fg:#0b1726; --muted:#4a5a73; --card:#f5f8fb; --border:#d9e3ef;
   }
   html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
     font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Helvetica,Arial; }
-  header { padding:18px 20px; border-bottom:1px solid var(--border); background:linear-gradient(0deg,#fff, #f7fbff); }
+  header { padding:18px 20px; border-bottom:1px solid var(--border);
+           background:linear-gradient(0deg,#fff, #f7fbff); }
   h1 { margin:0 0 6px 0; font-size:22px; font-weight:800; color:#0c2a40; }
   .sub { color:var(--muted); }
-  main { display:grid; grid-template-columns: 340px 1fr; gap:16px; padding:16px; }
-  .panel { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:14px; }
+  main { display:grid; grid-template-columns: 380px 1fr; gap:16px; padding:16px; }
+  .panel { background:var(--card); border:1px solid var(--border);
+           border-radius:14px; padding:14px; }
   label { display:block; margin-top:10px; color:#0c2a40; font-weight:700; font-size:13px; }
-  select { width:100%; min-height:96px; background:#fff; color:var(--fg); border:1px solid var(--border); border-radius:10px; padding:6px; }
+  select, input[type="number"], select.single { width:100%; background:#fff; color:var(--fg);
+           border:1px solid var(--border); border-radius:10px; padding:6px; }
+  select[multiple] { min-height:110px; }
+  .row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:10px; }
   .kpi { display:flex; gap:12px; margin-top:8px; flex-wrap:wrap; }
-  .badge { padding:6px 10px; border-radius:999px; background:#e9f6fd; border:1px solid #cdeafb; color:#074d6d; font-weight:600; }
-  table { width:100%; border-collapse: collapse; margin-top:10px; background:#fff; border-radius:10px; overflow:hidden; }
+  .badge { padding:6px 10px; border-radius:999px; background:#e9f6fd;
+           border:1px solid #cdeafb; color:#074d6d; font-weight:600; }
+  table { width:100%; border-collapse: collapse; margin-top:10px; background:#fff;
+          border-radius:10px; overflow:hidden; }
   th, td { padding:8px 10px; border-bottom:1px solid var(--border); }
-  th { text-align:left; color:#0c2a40; background:#eef7fd; }
+  th { text-align:left; color:#0c2a40; background:#eef7fd; cursor:pointer; user-select:none; }
+  th.sort-asc::after { content:" ▲"; font-size:11px; }
+  th.sort-desc::after{ content:" ▼"; font-size:11px; }
   .footer { color:var(--muted); font-size:12px; margin-top:8px; }
-  .btn { display:inline-block; padding:8px 12px; border-radius:10px; border:1px solid #a8d9f3; background:var(--unicef); color:#fff; text-decoration:none; cursor:pointer; font-weight:700; }
-  .btn:disabled { opacity:.6; cursor:not-allowed; }
-  .row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .hint { color:#5b738a; font-size:12px; margin-top:6px;}
+  .btn { display:inline-block; padding:8px 12px; border-radius:10px;
+         border:1px solid #a8d9f3; background:var(--unicef); color:#fff;
+         text-decoration:none; cursor:pointer; font-weight:700; }
   @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+  small.hint { color:#5b738a; }
 </style>
 
 <link rel="preconnect" href="https://cdn.plot.ly" crossorigin>
@@ -45,7 +50,8 @@
   <h1>OECD Expenditure Explorer</h1>
   <div class="sub">
     OECD aid <b>disbursements</b> to <b>LDCs</b>, years <span id="yearsBadge">…</span>.<br/>
-    Filter by Year, Country, Donor, Sector, Climate tag. Sankey shows <b>Total → Donor → Climate → Sector → Country</b>.<br/>
+    Filter by Year, Country, Donor, Sector, Climate tag. Sankey shows
+    <b>Total → Donor → Climate → Sector</b><span id="countryStageLabel"> → Country</span>.
     Hover to see amounts in <b>M USD</b>.
   </div>
 </header>
@@ -57,187 +63,312 @@
       <span class="badge" id="sumBadge">Total: … M USD</span>
     </div>
 
-    <label>Year — hold Ctrl/Cmd to multi-select</label>
+    <label>Year (multi-select)</label>
     <select id="yearSel" multiple></select>
 
-    <label>Country (LDC) — hold Ctrl/Cmd to multi-select</label>
+    <label>Country (LDC, multi-select)</label>
     <select id="countrySel" multiple></select>
 
-    <label>Donor — hold Ctrl/Cmd to multi-select</label>
+    <label>Donor (multi-select)</label>
     <select id="donorSel" multiple></select>
 
-    <label>Sector — hold Ctrl/Cmd to multi-select</label>
+    <label>Sector (multi-select)</label>
     <select id="sectorSel" multiple></select>
 
-    <label>Climate tag (Rio marker)</label>
+    <label>Climate tag (Rio marker, multi-select)</label>
     <select id="rioSel" multiple></select>
 
-    <div class="row" style="margin-top:10px;">
+    <div class="row">
+      <input type="checkbox" id="showCountryStage" checked>
+      <label for="showCountryStage" style="margin:0;font-weight:500;">Include Country stage</label>
+    </div>
+
+    <div class="row">
+      <div style="flex:1">
+        <label style="margin-top:0">Min Donor total (M USD)</label>
+        <input id="minDonor" type="number" min="0" step="1" value="0">
+      </div>
+      <div style="flex:1">
+        <label style="margin-top:0">Min Sector total (M USD)</label>
+        <input id="minSector" type="number" min="0" step="1" value="0">
+      </div>
+    </div>
+    <div class="row">
+      <div style="flex:1">
+        <label style="margin-top:0">Min Rio total (M USD)</label>
+        <input id="minRio" type="number" min="0" step="1" value="0">
+      </div>
+      <div style="flex:1">
+        <label style="margin-top:0">Min Country total (M USD)</label>
+        <input id="minCountry" type="number" min="0" step="1" value="0">
+      </div>
+    </div>
+
+    <div class="row">
+      <div style="flex:1">
+        <label style="margin-top:0">Display Multiplier</label>
+        <select id="multiplier" class="single">
+          <option value="1" selected>1× (assume usd_disbursement is USD)</option>
+          <option value="1000">1,000× (parquet is thousands of USD)</option>
+          <option value="1000000">1,000,000× (parquet is millions of USD)</option>
+        </select>
+        <small class="hint">If everything looks 1,000× too small, pick 1,000×. We’re not guessing your parquet units.</small>
+      </div>
+    </div>
+
+    <div class="row">
       <button class="btn" id="applyBtn">Apply filters</button>
-      <span class="hint">Tip: start with fewer Countries/Donors for speed, then expand.</span>
     </div>
 
     <div class="footer">
-      Source: OECD DAC CRS. © OECD. Licensed under CC BY 4.0. Values shown in <b>M USD</b>.
+      Source: OECD DAC CRS. © OECD. Licensed under CC BY 4.0. Amounts shown in <b>M USD</b> (after the chosen display multiplier).
     </div>
   </section>
 
   <section class="panel">
-    <div id="chart" style="height:720px;"></div>
+    <div id="chart" style="height:740px;"></div>
     <div id="table"></div>
   </section>
 </main>
 
 <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 <script>
-const DATA_URL = "/experiments/data/crs_ldc_2018_2023.json"; // must exist in your repo
+const DATA_URL = "/experiments/data/crs_ldc_2018_2023.json"; // must exist
 
 let DATA = null;
+const fmtM = (n)=> (+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const getSel = (id)=> [...document.getElementById(id).options].filter(o=>o.selected).map(o=>o.value);
 
-const rowsBadge = document.getElementById('rowsBadge');
-const sumBadge  = document.getElementById('sumBadge');
-
-const getSel = (id)=> [...document.getElementById(id).selectedOptions].map(o=>o.value);
-const fmtM   = (n)=> (+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
-
-function fillSelect(id, arr, pre=10){
+function fillSelectAll(id, arr){
   const sel = document.getElementById(id); sel.innerHTML="";
-  arr.forEach((v,i)=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; if(i<pre) o.selected=true; sel.appendChild(o); });
+  arr.forEach((v)=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; o.selected=true; sel.appendChild(o); });
 }
 
-function prepFilters(){
-  const years = DATA.distinct.years.map(String);
-  fillSelect('yearSel', years, years.length);
-  fillSelect('countrySel', DATA.distinct.countries, Math.min(10, DATA.distinct.countries.length));
-  fillSelect('donorSel', DATA.distinct.donors, Math.min(10, DATA.distinct.donors.length));
-  fillSelect('sectorSel', DATA.distinct.sectors, DATA.distinct.sectors.length);
-  fillSelect('rioSel', DATA.distinct.rios, DATA.distinct.rios.length);
+function applyCutoffs(aggregates, cutoffs){
+  // aggregates: maps keyed per stage, values in M USD
+  // cutoffs: { donor, sector, rio, country } thresholds in M USD (already rescaled)
+  // return a filtered view (remove nodes < cutoff and any links depending on them)
+  const keepDonor = new Set(Object.entries(aggregates.byDonor).filter(([,v])=>v>=cutoffs.donor).map(([k])=>k));
+  const keepRio   = new Set(Object.entries(aggregates.byRio).filter(([,v])=>v>=cutoffs.rio).map(([k])=>k));
+  const keepSector= new Set(Object.entries(aggregates.bySector).filter(([,v])=>v>=cutoffs.sector).map(([k])=>k));
+  const keepCountry=new Set(Object.entries(aggregates.byCountry).filter(([,v])=>v>=cutoffs.country).map(([k])=>k));
+
+  // prune each link collection
+  const pruned = {
+    donorTotals: Object.fromEntries(Object.entries(aggregates.byDonor).filter(([k,v])=>keepDonor.has(k))),
+    donorRio: Object.fromEntries(Object.entries(aggregates.byDonorRio).filter(([k,v])=>{
+      const [donor,rio]=k.split("|"); return keepDonor.has(donor)&&keepRio.has(rio);
+    })),
+    rioSector: Object.fromEntries(Object.entries(aggregates.byRioSector).filter(([k,v])=>{
+      const [rio,sector]=k.split("|"); return keepRio.has(rio)&&keepSector.has(sector);
+    })),
+    sectorCountry: Object.fromEntries(Object.entries(aggregates.bySectorCountry).filter(([k,v])=>{
+      const [sector,country]=k.split("|"); return keepSector.has(sector)&&keepCountry.has(country);
+    })),
+    keeps: { keepDonor, keepRio, keepSector, keepCountry }
+  };
+  return pruned;
 }
 
-function applyFilters(){
-  const y = new Set(getSel('yearSel').map(Number));
-  const c = new Set(getSel('countrySel'));
-  const d = new Set(getSel('donorSel'));
-  const s = new Set(getSel('sectorSel'));
-  const r = new Set(getSel('rioSel'));
+function sortTable(tableState, th){
+  const col = th.dataset.col;
+  const current = tableState.sort[col] || 'none';
+  // cycle: none -> asc -> desc -> asc...
+  const next = current === 'asc' ? 'desc' : 'asc';
+  tableState.sort = {[col]: next};
+  // update headers
+  th.parentElement.querySelectorAll('th').forEach(h=>h.classList.remove('sort-asc','sort-desc'));
+  th.classList.add(next==='asc'?'sort-asc':'sort-desc');
+  // re-render
+  tableState.render();
+}
 
-  const filtered = DATA.records.filter(row =>
-    y.has(row.year) && c.has(row.Country) && d.has(row.Donor) &&
-    s.has(row.Sector) && r.has(row.RioMarker)
+function renderTable(rows, showCountry){
+  const el=document.getElementById('table'); el.innerHTML="";
+  const t=document.createElement('table'); const tb=document.createElement('tbody');
+  const headers = showCountry
+    ? [{k:'Donor',t:'Donor'},{k:'RioMarker',t:'Climate'},{k:'Sector',t:'Sector'},{k:'Country',t:'Country'},{k:'usd_m',t:'USD (M)'}]
+    : [{k:'Donor',t:'Donor'},{k:'RioMarker',t:'Climate'},{k:'Sector',t:'Sector'},{k:'usd_m',t:'USD (M)'}];
+  const thead=document.createElement('thead'); const trh=document.createElement('tr');
+  const tableState = { sort:{}, render: ()=>{} };
+
+  headers.forEach(h=>{
+    const th=document.createElement('th'); th.textContent=h.t; th.dataset.col=h.k;
+    th.addEventListener('click', ()=>sortTable(tableState, th));
+    trh.appendChild(th);
+  });
+  thead.appendChild(trh); t.appendChild(thead);
+
+  tableState.render = ()=>{
+    const [sortCol,dir] = Object.entries(tableState.sort)[0] || [null,null];
+    const sorted = [...rows];
+    if(sortCol){
+      sorted.sort((a,b)=>{
+        const av=a[sortCol], bv=b[sortCol];
+        if (sortCol==='usd_m') return dir==='asc' ? av-bv : bv-av;
+        return dir==='asc' ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+      });
+    }
+    tb.innerHTML="";
+    sorted.forEach(r=>{
+      const tr=document.createElement('tr');
+      tr.innerHTML = showCountry
+        ? `<td>${r.Donor}</td><td>${r.RioMarker}</td><td>${r.Sector}</td><td>${r.Country}</td><td>${fmtM(r.usd_m)}</td>`
+        : `<td>${r.Donor}</td><td>${r.RioMarker}</td><td>${r.Sector}</td><td>${fmtM(r.usd_m)}</td>`;
+      tb.appendChild(tr);
+    });
+  };
+
+  tableState.render();
+  t.appendChild(tb); el.appendChild(t);
+}
+
+function render(){
+  const years = new Set(getSel('yearSel').map(Number));
+  const countries = new Set(getSel('countrySel'));
+  const donors = new Set(getSel('donorSel'));
+  const sectors = new Set(getSel('sectorSel'));
+  const rios = new Set(getSel('rioSel'));
+  const showCountry = document.getElementById('showCountryStage').checked;
+  const mult = Number(document.getElementById('multiplier').value); // 1, 1e3, 1e6
+
+  // Filter per selected dimension
+  const all = DATA.records.filter(r =>
+    years.has(r.year) && countries.has(r.Country) && donors.has(r.Donor) &&
+    sectors.has(r.Sector) && rios.has(r.RioMarker)
   );
 
-  rowsBadge.textContent = `Rows: ${filtered.length.toLocaleString()}`;
-  const totalM = filtered.reduce((a,x)=>a + (+x.usd_m), 0);
-  sumBadge.textContent = `Total: ${fmtM(totalM)} M USD`;
+  // Apply display multiplier: DATA.usd_m = USD/1e6; display as (USD * mult)/1e6
+  const factor = mult; // multiply M-USD by mult
+  const fm = all.map(r => ({...r, usd_m: r.usd_m * factor}));
 
-  // Build Sankey: Total → Donor → Rio → Sector → Country
+  // KPIs
+  document.getElementById('rowsBadge').textContent = `Rows: ${fm.length.toLocaleString()}`;
+  const totalM = fm.reduce((a,x)=>a + x.usd_m, 0);
+  document.getElementById('sumBadge').textContent = `Total: ${fmtM(totalM)} M USD`;
+
+  // Aggregate for each stage (M USD)
+  const add = (map,key,val)=> map.set(key,(map.get(key)||0)+val);
+
+  const byDonor = new Map();
+  const byRio = new Map();
+  const bySector = new Map();
+  const byCountry = new Map();
+  const byDonorRio = new Map();       // donor|rio
+  const byRioSector = new Map();      // rio|sector
+  const bySectorCountry = new Map();  // sector|country
+
+  fm.forEach(r=>{
+    add(byDonor, r.Donor, r.usd_m);
+    add(byRio, r.RioMarker, r.usd_m);
+    add(bySector, r.Sector, r.usd_m);
+    add(byCountry, r.Country, r.usd_m);
+    add(byDonorRio, r.Donor+"|"+r.RioMarker, r.usd_m);
+    add(byRioSector, r.RioMarker+"|"+r.Sector, r.usd_m);
+    add(bySectorCountry, r.Sector+"|"+r.Country, r.usd_m);
+  });
+
+  // Cutoffs (already in M USD space)
+  const cut = {
+    donor:   Math.max(0, Number(document.getElementById('minDonor').value||0)),
+    sector:  Math.max(0, Number(document.getElementById('minSector').value||0)),
+    rio:     Math.max(0, Number(document.getElementById('minRio').value||0)),
+    country: Math.max(0, Number(document.getElementById('minCountry').value||0)),
+  };
+
+  const aggObj = {
+    byDonor: Object.fromEntries(byDonor),
+    byRio: Object.fromEntries(byRio),
+    bySector: Object.fromEntries(bySector),
+    byCountry: Object.fromEntries(byCountry),
+    byDonorRio: Object.fromEntries(byDonorRio),
+    byRioSector: Object.fromEntries(byRioSector),
+    bySectorCountry: Object.fromEntries(bySectorCountry),
+  };
+  const pruned = applyCutoffs(aggObj, cut);
+
+  // Build Sankey
   const labels = ["Total Aid"];
   const idx = (lab)=>{ let i=labels.indexOf(lab); if(i===-1){labels.push(lab); i=labels.length-1;} return i; };
   const src=[], tgt=[], val=[];
 
-  // Donor totals
-  const byDonor = new Map();
-  for (const rcd of filtered) byDonor.set(rcd.Donor, (byDonor.get(rcd.Donor)||0) + rcd.usd_m);
-  for (const [donor,v] of byDonor) { src.push(idx("Total Aid")); tgt.push(idx(donor)); val.push(v); }
-
-  // Donor → Rio
-  const byDonorRio = new Map();
-  for (const rcd of filtered) {
-    const k = rcd.Donor + "|" + rcd.RioMarker;
-    byDonorRio.set(k, (byDonorRio.get(k)||0) + rcd.usd_m);
+  // Total → Donor
+  for (const [donor,v] of Object.entries(pruned.donorTotals)) {
+    src.push(idx("Total Aid")); tgt.push(idx(donor)); val.push(v);
   }
-  for (const [k,v] of byDonorRio){
+  // Donor → Rio
+  for (const [k,v] of Object.entries(pruned.donorRio)) {
     const [donor,rio] = k.split("|");
     src.push(idx(donor)); tgt.push(idx(rio)); val.push(v);
   }
-
   // Rio → Sector
-  const byRioSector = new Map();
-  for (const rcd of filtered) {
-    const k = rcd.RioMarker + "|" + rcd.Sector;
-    byRioSector.set(k, (byRioSector.get(k)||0) + rcd.usd_m);
-  }
-  for (const [k,v] of byRioSector){
+  for (const [k,v] of Object.entries(pruned.rioSector)) {
     const [rio,sector] = k.split("|");
     src.push(idx(rio)); tgt.push(idx(sector)); val.push(v);
   }
-
-  // Sector → Country (NEW)
-  const bySectorCountry = new Map();
-  for (const rcd of filtered) {
-    const k = rcd.Sector + "|" + rcd.Country;
-    bySectorCountry.set(k, (bySectorCountry.get(k)||0) + rcd.usd_m);
-  }
-  for (const [k,v] of bySectorCountry){
-    const [sector,country] = k.split("|");
-    src.push(idx(sector)); tgt.push(idx(country)); val.push(v);
+  // Sector → Country (optional)
+  if (document.getElementById('showCountryStage').checked) {
+    for (const [k,v] of Object.entries(pruned.sectorCountry)) {
+      const [sector,country] = k.split("|");
+      src.push(idx(sector)); tgt.push(idx(country)); val.push(v);
+    }
   }
 
   Plotly.react("chart", [{
     type:"sankey",
-    node:{
-      label:labels, pad:15, thickness:18,
-      color: labels.map(l =>
-        l==="Total Aid" ? "#1CABE2" :
-        l==="Principal" || l==="Significant" || l==="Not Tagged" ? "#74d1f2" :
-        l==="Economic Infrastructure" || l==="Social Services" || l==="Production Sectors" ||
-        l==="Water & Other Infra" || l==="Multi-sector / Cross-cutting" ||
-        l==="Humanitarian Aid" || l==="Debt/Admin/Refugees" ? "#BFE8FA" :
-        "#E9F6FD"
-      ),
-      hovertemplate:"%{label}<extra></extra>"
-    },
-    link:{
-      source:src, target:tgt, value:val,
-      hovertemplate:"Flow: %{value:.2f} M USD<extra></extra>"
-    }
+    node:{ label:labels, pad:15, thickness:18, hovertemplate:"%{label}<extra></extra>" },
+    link:{ source:src, target:tgt, value:val, hovertemplate:"Flow: %{value:.2f} M USD<extra></extra>" }
   }], {
-    title:`Aid Flow (${DATA.meta.years[0]}–${DATA.meta.years[1]}): Total → Donor → Climate → Sector → Country`,
+    title:`Aid Flow (M USD, multiplier ${factor.toLocaleString()}×)`,
     font:{size:12}, paper_bgcolor:"transparent", plot_bgcolor:"transparent",
-    height:720, margin:{t:40,l:10,r:10,b:10}
+    height: document.getElementById('showCountryStage').checked ? 740 : 660,
+    margin:{t:40,l:10,r:10,b:10}
   });
 
-  // Table: Donor, Rio, Sector, Country
-  const key = (r)=> r.Donor+"|"+r.RioMarker+"|"+r.Sector+"|"+r.Country;
-  const agg = new Map();
-  for (const rcd of filtered) agg.set(key(rcd), (agg.get(key(rcd))||0)+rcd.usd_m);
-  const rows = [...agg.entries()].map(([k,v])=>{
-    const [Donor,RioMarker,Sector,Country] = k.split("|");
-    return {Donor,RioMarker,Sector,Country,usd_m:v};
-  }).sort((a,b)=>
-    a.Donor.localeCompare(b.Donor) ||
-    a.RioMarker.localeCompare(b.RioMarker) ||
-    a.Sector.localeCompare(b.Sector) ||
-    a.Country.localeCompare(b.Country)
-  );
+  // Table rows
+  const showCountry = document.getElementById('showCountryStage').checked;
+  const key = (r)=> showCountry
+    ? r.Donor+"|"+r.RioMarker+"|"+r.Sector+"|"+r.Country
+    : r.Donor+"|"+r.RioMarker+"|"+r.Sector;
+  const tmap = new Map();
+  fm.forEach(r=> tmap.set(key(r),(tmap.get(key(r))||0)+r.usd_m));
+  const rows = [...tmap.entries()].map(([k,v])=>{
+    const parts = k.split("|");
+    return showCountry
+      ? {Donor:parts[0], RioMarker:parts[1], Sector:parts[2], Country:parts[3], usd_m:v}
+      : {Donor:parts[0], RioMarker:parts[1], Sector:parts[2], usd_m:v};
+  });
 
-  const el=document.getElementById('table'); el.innerHTML="";
-  const t=document.createElement('table');
-  t.innerHTML = `<thead><tr><th>Donor</th><th>Climate</th><th>Sector</th><th>Country</th><th>USD (M)</th></tr></thead>`;
-  const tb=document.createElement('tbody');
-  for (const r of rows){
-    const tr=document.createElement('tr');
-    tr.innerHTML = `<td>${r.Donor}</td><td>${r.RioMarker}</td><td>${r.Sector}</td><td>${r.Country}</td><td>${fmtM(r.usd_m)}</td>`;
-    tb.appendChild(tr);
-  }
-  t.appendChild(tb); el.appendChild(t);
+  renderTable(rows, showCountry);
 }
 
 async function main(){
   const resp = await fetch(DATA_URL, {cache:"no-store"});
-  if(!resp.ok){ throw new Error("Failed to load data: "+resp.status); }
+  if(!resp.ok) throw new Error("Failed to load data: "+resp.status);
   DATA = await resp.json();
   document.getElementById('yearsBadge').textContent = `${DATA.meta.years[0]}–${DATA.meta.years[1]}`;
 
-  prepFilters();
-  document.getElementById('applyBtn').addEventListener('click', applyFilters);
-  ["yearSel","countrySel","donorSel","sectorSel","rioSel"].forEach(id=>{
-    document.getElementById(id).addEventListener('change', ()=>{ clearTimeout(window.__t); window.__t=setTimeout(applyFilters,200); });
-  });
-  applyFilters();
+  // Select ALL by default (your request), even if it makes a giant table
+  fillSelectAll('yearSel', DATA.distinct.years.map(String));
+  fillSelectAll('countrySel', DATA.distinct.countries);
+  fillSelectAll('donorSel', DATA.distinct.donors);
+  fillSelectAll('sectorSel', DATA.distinct.sectors);
+  fillSelectAll('rioSel', DATA.distinct.rios);
+
+  // Hook events
+  ['applyBtn','yearSel','countrySel','donorSel','sectorSel','rioSel','showCountryStage','minDonor','minSector','minRio','minCountry','multiplier']
+    .forEach(id=>{
+      const el = document.getElementById(id);
+      (id==='applyBtn')
+        ? el.addEventListener('click', render)
+        : el.addEventListener('change', ()=>{ clearTimeout(window.__t); window.__t=setTimeout(render,150);});
+    });
+
+  render();
 }
 main().catch(err=>{ console.error(err); alert("Failed to load: "+err.message); });
 </script>
 </body>
 </html>
+
 
