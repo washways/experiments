@@ -5,39 +5,47 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>OECD Expenditure Explorer — LDCs (2018–2023)</title>
 
-<!-- Inline favicon -->
-<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="%230b1020"/><circle cx="32" cy="32" r="18" fill="%236aa0ff"/></svg>'>
-
-<link rel="preconnect" href="https://cdn.plot.ly" crossorigin>
+<!-- UNICEF blue theme -->
 <style>
-  :root { --bg:#0b1020; --fg:#e8ebf2; --muted:#9aa3b2; --card:#141a2f; --accent:#6aa0ff; }
-  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Helvetica,Arial;}
-  header { padding:20px; border-bottom:1px solid #1e2746; }
-  h1 { margin:0 0 8px 0; font-size:20px; }
-  .sub { color:#9aa3b2; }
-  main { display:grid; grid-template-columns: 320px 1fr; gap:16px; padding:16px; }
-  .panel { background:var(--card); border:1px solid #1e2746; border-radius:14px; padding:14px; }
-  label { display:block; margin-top:10px; color:#cbd3e3; font-weight:600; }
-  select { width:100%; min-height:84px; background:#0e1430; color:var(--fg); border:1px solid #2a3359; border-radius:10px; padding:6px; }
-  .kpi { display:flex; gap:16px; margin-top:8px; flex-wrap:wrap; }
-  .badge { padding:6px 10px; border-radius:999px; background:#0e1430; border:1px solid #263058; color:#cbd3e3; }
-  table { width:100%; border-collapse: collapse; margin-top:10px; }
-  th, td { padding:8px 10px; border-bottom:1px solid #1f2748; }
-  th { text-align:left; color:#cbd3e3; }
+  :root {
+    --unicef:#1CABE2; /* UNICEF blue */
+    --bg:#ffffff;
+    --fg:#0b1726;
+    --muted:#4a5a73;
+    --card:#f5f8fb;
+    --border:#d9e3ef;
+  }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Helvetica,Arial; }
+  header { padding:18px 20px; border-bottom:1px solid var(--border); background:linear-gradient(0deg,#fff, #f7fbff); }
+  h1 { margin:0 0 6px 0; font-size:22px; font-weight:800; color:#0c2a40; }
+  .sub { color:var(--muted); }
+  main { display:grid; grid-template-columns: 340px 1fr; gap:16px; padding:16px; }
+  .panel { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:14px; }
+  label { display:block; margin-top:10px; color:#0c2a40; font-weight:700; font-size:13px; }
+  select { width:100%; min-height:96px; background:#fff; color:var(--fg); border:1px solid var(--border); border-radius:10px; padding:6px; }
+  .kpi { display:flex; gap:12px; margin-top:8px; flex-wrap:wrap; }
+  .badge { padding:6px 10px; border-radius:999px; background:#e9f6fd; border:1px solid #cdeafb; color:#074d6d; font-weight:600; }
+  table { width:100%; border-collapse: collapse; margin-top:10px; background:#fff; border-radius:10px; overflow:hidden; }
+  th, td { padding:8px 10px; border-bottom:1px solid var(--border); }
+  th { text-align:left; color:#0c2a40; background:#eef7fd; }
   .footer { color:var(--muted); font-size:12px; margin-top:8px; }
-  .btn { display:inline-block; padding:8px 12px; border-radius:10px; border:1px solid #2a3359; background:#0f1736; color:#dbe4ff; text-decoration:none; cursor:pointer; }
+  .btn { display:inline-block; padding:8px 12px; border-radius:10px; border:1px solid #a8d9f3; background:var(--unicef); color:#fff; text-decoration:none; cursor:pointer; font-weight:700; }
   .btn:disabled { opacity:.6; cursor:not-allowed; }
   .row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .hint { color:#9aa3b2; font-size:12px; margin-top:6px;}
+  .hint { color:#5b738a; font-size:12px; margin-top:6px;}
   @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
 </style>
+
+<link rel="preconnect" href="https://cdn.plot.ly" crossorigin>
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="%231CABE2"/><circle cx="32" cy="32" r="18" fill="%23ffffff"/></svg>'>
 </head>
 <body>
 <header>
   <h1>OECD Expenditure Explorer</h1>
   <div class="sub">
     OECD aid <b>disbursements</b> to <b>LDCs</b>, years <span id="yearsBadge">…</span>.<br/>
-    Filter by Country, Donor, Sector, Climate tag. Chart shows flows <b>Total → Donor → Climate → Sector</b>.<br/>
+    Filter by Year, Country, Donor, Sector, Climate tag. Sankey shows <b>Total → Donor → Climate → Sector → Country</b>.<br/>
     Hover to see amounts in <b>M USD</b>.
   </div>
 </header>
@@ -49,12 +57,18 @@
       <span class="badge" id="sumBadge">Total: … M USD</span>
     </div>
 
+    <label>Year — hold Ctrl/Cmd to multi-select</label>
+    <select id="yearSel" multiple></select>
+
     <label>Country (LDC) — hold Ctrl/Cmd to multi-select</label>
     <select id="countrySel" multiple></select>
+
     <label>Donor — hold Ctrl/Cmd to multi-select</label>
     <select id="donorSel" multiple></select>
+
     <label>Sector — hold Ctrl/Cmd to multi-select</label>
     <select id="sectorSel" multiple></select>
+
     <label>Climate tag (Rio marker)</label>
     <select id="rioSel" multiple></select>
 
@@ -69,130 +83,161 @@
   </section>
 
   <section class="panel">
-    <div id="chart" style="height:640px;"></div>
+    <div id="chart" style="height:720px;"></div>
     <div id="table"></div>
   </section>
 </main>
 
 <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 <script>
-const DATA_URL = "/experiments/data/crs_ldc_2018_2023.json"; // <-- this file must exist in your repo
+const DATA_URL = "/experiments/data/crs_ldc_2018_2023.json"; // must exist in your repo
+
+let DATA = null;
 
 const rowsBadge = document.getElementById('rowsBadge');
 const sumBadge  = document.getElementById('sumBadge');
 
-let DATA = null;
+const getSel = (id)=> [...document.getElementById(id).selectedOptions].map(o=>o.value);
+const fmtM   = (n)=> (+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 
 function fillSelect(id, arr, pre=10){
   const sel = document.getElementById(id); sel.innerHTML="";
   arr.forEach((v,i)=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; if(i<pre) o.selected=true; sel.appendChild(o); });
 }
 
-function getSel(id){
-  return [...document.getElementById(id).selectedOptions].map(o=>o.value);
-}
-
-function human(n){ return (+n).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}); }
-
-async function main(){
-  const resp = await fetch(DATA_URL, {cache:"no-store"});
-  if(!resp.ok){ throw new Error("Failed to load data: "+resp.status); }
-  DATA = await resp.json();
-
-  document.getElementById('yearsBadge').textContent = `${DATA.meta.years[0]}–${DATA.meta.years[1]}`;
-
+function prepFilters(){
+  const years = DATA.distinct.years.map(String);
+  fillSelect('yearSel', years, years.length);
   fillSelect('countrySel', DATA.distinct.countries, Math.min(10, DATA.distinct.countries.length));
   fillSelect('donorSel', DATA.distinct.donors, Math.min(10, DATA.distinct.donors.length));
   fillSelect('sectorSel', DATA.distinct.sectors, DATA.distinct.sectors.length);
   fillSelect('rioSel', DATA.distinct.rios, DATA.distinct.rios.length);
-
-  document.getElementById('applyBtn').addEventListener('click', render);
-  ["countrySel","donorSel","sectorSel","rioSel"].forEach(id=>{
-    document.getElementById(id).addEventListener('change', ()=>{ clearTimeout(window.__t); window.__t=setTimeout(render,200); });
-  });
-
-  render();
 }
 
-function render(){
+function applyFilters(){
+  const y = new Set(getSel('yearSel').map(Number));
   const c = new Set(getSel('countrySel'));
   const d = new Set(getSel('donorSel'));
   const s = new Set(getSel('sectorSel'));
   const r = new Set(getSel('rioSel'));
 
   const filtered = DATA.records.filter(row =>
-    c.has(row.Country) && d.has(row.Donor) && s.has(row.Sector) && r.has(row.RioMarker)
+    y.has(row.year) && c.has(row.Country) && d.has(row.Donor) &&
+    s.has(row.Sector) && r.has(row.RioMarker)
   );
 
   rowsBadge.textContent = `Rows: ${filtered.length.toLocaleString()}`;
   const totalM = filtered.reduce((a,x)=>a + (+x.usd_m), 0);
-  sumBadge.textContent = `Total: ${human(totalM)} M USD`;
+  sumBadge.textContent = `Total: ${fmtM(totalM)} M USD`;
 
-  // Build Sankey arrays  (Total → Donor → Rio → Sector)
+  // Build Sankey: Total → Donor → Rio → Sector → Country
   const labels = ["Total Aid"];
-  const mapIdx = (lab)=>{ let i=labels.indexOf(lab); if(i===-1){labels.push(lab); i=labels.length-1;} return i; };
+  const idx = (lab)=>{ let i=labels.indexOf(lab); if(i===-1){labels.push(lab); i=labels.length-1;} return i; };
   const src=[], tgt=[], val=[];
 
   // Donor totals
   const byDonor = new Map();
-  filtered.forEach(r=> byDonor.set(r.Donor, (byDonor.get(r.Donor)||0) + r.usd_m));
-  for (const [donor,v] of byDonor) { src.push(mapIdx("Total Aid")); tgt.push(mapIdx(donor)); val.push(v); }
+  for (const rcd of filtered) byDonor.set(rcd.Donor, (byDonor.get(rcd.Donor)||0) + rcd.usd_m);
+  for (const [donor,v] of byDonor) { src.push(idx("Total Aid")); tgt.push(idx(donor)); val.push(v); }
 
   // Donor → Rio
-  const byDonorRio = new Map(); // key: donor|rio
-  filtered.forEach(r=>{
-    const k = r.Donor + "|" + r.RioMarker;
-    byDonorRio.set(k, (byDonorRio.get(k)||0) + r.usd_m);
-  });
+  const byDonorRio = new Map();
+  for (const rcd of filtered) {
+    const k = rcd.Donor + "|" + rcd.RioMarker;
+    byDonorRio.set(k, (byDonorRio.get(k)||0) + rcd.usd_m);
+  }
   for (const [k,v] of byDonorRio){
     const [donor,rio] = k.split("|");
-    src.push(mapIdx(donor)); tgt.push(mapIdx(rio)); val.push(v);
+    src.push(idx(donor)); tgt.push(idx(rio)); val.push(v);
   }
 
   // Rio → Sector
   const byRioSector = new Map();
-  filtered.forEach(r=>{
-    const k = r.RioMarker + "|" + r.Sector;
-    byRioSector.set(k, (byRioSector.get(k)||0) + r.usd_m);
-  });
+  for (const rcd of filtered) {
+    const k = rcd.RioMarker + "|" + rcd.Sector;
+    byRioSector.set(k, (byRioSector.get(k)||0) + rcd.usd_m);
+  }
   for (const [k,v] of byRioSector){
     const [rio,sector] = k.split("|");
-    src.push(mapIdx(rio)); tgt.push(mapIdx(sector)); val.push(v);
+    src.push(idx(rio)); tgt.push(idx(sector)); val.push(v);
+  }
+
+  // Sector → Country (NEW)
+  const bySectorCountry = new Map();
+  for (const rcd of filtered) {
+    const k = rcd.Sector + "|" + rcd.Country;
+    bySectorCountry.set(k, (bySectorCountry.get(k)||0) + rcd.usd_m);
+  }
+  for (const [k,v] of bySectorCountry){
+    const [sector,country] = k.split("|");
+    src.push(idx(sector)); tgt.push(idx(country)); val.push(v);
   }
 
   Plotly.react("chart", [{
     type:"sankey",
-    node:{ label:labels, pad:15, thickness:20, hovertemplate:"%{label}<extra></extra>" },
-    link:{ source:src, target:tgt, value:val, hovertemplate:"Flow: %{value:.2f} M USD<extra></extra>" }
-  }], { title:`Aid Flow (${DATA.meta.years[0]}–${DATA.meta.years[1]}): Total → Donor → Climate → Sector`,
-        font:{size:12}, paper_bgcolor:"transparent", plot_bgcolor:"transparent",
-        height:640, margin:{t:40,l:10,r:10,b:10} });
+    node:{
+      label:labels, pad:15, thickness:18,
+      color: labels.map(l =>
+        l==="Total Aid" ? "#1CABE2" :
+        l==="Principal" || l==="Significant" || l==="Not Tagged" ? "#74d1f2" :
+        l==="Economic Infrastructure" || l==="Social Services" || l==="Production Sectors" ||
+        l==="Water & Other Infra" || l==="Multi-sector / Cross-cutting" ||
+        l==="Humanitarian Aid" || l==="Debt/Admin/Refugees" ? "#BFE8FA" :
+        "#E9F6FD"
+      ),
+      hovertemplate:"%{label}<extra></extra>"
+    },
+    link:{
+      source:src, target:tgt, value:val,
+      hovertemplate:"Flow: %{value:.2f} M USD<extra></extra>"
+    }
+  }], {
+    title:`Aid Flow (${DATA.meta.years[0]}–${DATA.meta.years[1]}): Total → Donor → Climate → Sector → Country`,
+    font:{size:12}, paper_bgcolor:"transparent", plot_bgcolor:"transparent",
+    height:720, margin:{t:40,l:10,r:10,b:10}
+  });
 
-  // Table
+  // Table: Donor, Rio, Sector, Country
+  const key = (r)=> r.Donor+"|"+r.RioMarker+"|"+r.Sector+"|"+r.Country;
+  const agg = new Map();
+  for (const rcd of filtered) agg.set(key(rcd), (agg.get(key(rcd))||0)+rcd.usd_m);
+  const rows = [...agg.entries()].map(([k,v])=>{
+    const [Donor,RioMarker,Sector,Country] = k.split("|");
+    return {Donor,RioMarker,Sector,Country,usd_m:v};
+  }).sort((a,b)=>
+    a.Donor.localeCompare(b.Donor) ||
+    a.RioMarker.localeCompare(b.RioMarker) ||
+    a.Sector.localeCompare(b.Sector) ||
+    a.Country.localeCompare(b.Country)
+  );
+
   const el=document.getElementById('table'); el.innerHTML="";
   const t=document.createElement('table');
-  t.innerHTML = `<thead><tr><th>Donor</th><th>Climate</th><th>Sector</th><th>USD (M)</th></tr></thead>`;
+  t.innerHTML = `<thead><tr><th>Donor</th><th>Climate</th><th>Sector</th><th>Country</th><th>USD (M)</th></tr></thead>`;
   const tb=document.createElement('tbody');
-
-  // Donor,Rio,Sector rollup for the table
-  const key = (r)=> r.Donor+"|"+r.RioMarker+"|"+r.Sector;
-  const agg = new Map();
-  filtered.forEach(r=> agg.set(key(r), (agg.get(key(r))||0)+r.usd_m));
-  const rows = [...agg.entries()].map(([k,v])=>{ const [Donor,RioMarker,Sector] = k.split("|"); return {Donor,RioMarker,Sector,usd_m:v}; })
-                                 .sort((a,b)=> a.Donor.localeCompare(b.Donor) || a.RioMarker.localeCompare(b.RioMarker) || a.Sector.localeCompare(b.Sector));
-
-  rows.forEach(r=>{
+  for (const r of rows){
     const tr=document.createElement('tr');
-    tr.innerHTML = `<td>${r.Donor}</td><td>${r.RioMarker}</td><td>${r.Sector}</td><td>${human(r.usd_m)}</td>`;
+    tr.innerHTML = `<td>${r.Donor}</td><td>${r.RioMarker}</td><td>${r.Sector}</td><td>${r.Country}</td><td>${fmtM(r.usd_m)}</td>`;
     tb.appendChild(tr);
-  });
+  }
   t.appendChild(tb); el.appendChild(t);
 }
 
-main().catch(err=>{
-  console.error(err);
-  alert("Failed to load data: "+err.message);
-});
+async function main(){
+  const resp = await fetch(DATA_URL, {cache:"no-store"});
+  if(!resp.ok){ throw new Error("Failed to load data: "+resp.status); }
+  DATA = await resp.json();
+  document.getElementById('yearsBadge').textContent = `${DATA.meta.years[0]}–${DATA.meta.years[1]}`;
+
+  prepFilters();
+  document.getElementById('applyBtn').addEventListener('click', applyFilters);
+  ["yearSel","countrySel","donorSel","sectorSel","rioSel"].forEach(id=>{
+    document.getElementById(id).addEventListener('change', ()=>{ clearTimeout(window.__t); window.__t=setTimeout(applyFilters,200); });
+  });
+  applyFilters();
+}
+main().catch(err=>{ console.error(err); alert("Failed to load: "+err.message); });
 </script>
 </body>
 </html>
+
