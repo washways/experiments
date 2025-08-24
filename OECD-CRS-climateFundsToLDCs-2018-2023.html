@@ -108,11 +108,11 @@
       <div style="flex:1">
         <label style="margin-top:0">Display Multiplier</label>
         <select id="multiplier" class="single">
-          <option value="1" selected>1× (assume usd_disbursement is USD)</option>
+          <option value="1" selected>1× (parquet is USD)</option>
           <option value="1000">1,000× (parquet is thousands of USD)</option>
           <option value="1000000">1,000,000× (parquet is millions of USD)</option>
         </select>
-        <small class="hint">If everything looks 1,000× too small, pick 1,000×. We’re not guessing your parquet units.</small>
+        <small class="hint">If amounts look 1,000× too small, pick 1,000×. No guessing.</small>
       </div>
     </div>
 
@@ -145,41 +145,33 @@ function fillSelectAll(id, arr){
 }
 
 function applyCutoffs(aggregates, cutoffs){
-  // aggregates: maps keyed per stage, values in M USD
-  // cutoffs: { donor, sector, rio, country } thresholds in M USD (already rescaled)
-  // return a filtered view (remove nodes < cutoff and any links depending on them)
-  const keepDonor = new Set(Object.entries(aggregates.byDonor).filter(([,v])=>v>=cutoffs.donor).map(([k])=>k));
-  const keepRio   = new Set(Object.entries(aggregates.byRio).filter(([,v])=>v>=cutoffs.rio).map(([k])=>k));
-  const keepSector= new Set(Object.entries(aggregates.bySector).filter(([,v])=>v>=cutoffs.sector).map(([k])=>k));
-  const keepCountry=new Set(Object.entries(aggregates.byCountry).filter(([,v])=>v>=cutoffs.country).map(([k])=>k));
+  const keepDonor   = new Set(Object.entries(aggregates.byDonor).filter(([,v])=>v>=cutoffs.donor).map(([k])=>k));
+  const keepRio     = new Set(Object.entries(aggregates.byRio).filter(([,v])=>v>=cutoffs.rio).map(([k])=>k));
+  const keepSector  = new Set(Object.entries(aggregates.bySector).filter(([,v])=>v>=cutoffs.sector).map(([k])=>k));
+  const keepCountry = new Set(Object.entries(aggregates.byCountry).filter(([,v])=>v>=cutoffs.country).map(([k])=>k));
 
-  // prune each link collection
-  const pruned = {
-    donorTotals: Object.fromEntries(Object.entries(aggregates.byDonor).filter(([k,v])=>keepDonor.has(k))),
-    donorRio: Object.fromEntries(Object.entries(aggregates.byDonorRio).filter(([k,v])=>{
+  return {
+    donorTotals: Object.fromEntries(Object.entries(aggregates.byDonor).filter(([k])=>keepDonor.has(k))),
+    donorRio: Object.fromEntries(Object.entries(aggregates.byDonorRio).filter(([k])=>{
       const [donor,rio]=k.split("|"); return keepDonor.has(donor)&&keepRio.has(rio);
     })),
-    rioSector: Object.fromEntries(Object.entries(aggregates.byRioSector).filter(([k,v])=>{
+    rioSector: Object.fromEntries(Object.entries(aggregates.byRioSector).filter(([k])=>{
       const [rio,sector]=k.split("|"); return keepRio.has(rio)&&keepSector.has(sector);
     })),
-    sectorCountry: Object.fromEntries(Object.entries(aggregates.bySectorCountry).filter(([k,v])=>{
+    sectorCountry: Object.fromEntries(Object.entries(aggregates.bySectorCountry).filter(([k])=>{
       const [sector,country]=k.split("|"); return keepSector.has(sector)&&keepCountry.has(country);
     })),
     keeps: { keepDonor, keepRio, keepSector, keepCountry }
   };
-  return pruned;
 }
 
 function sortTable(tableState, th){
   const col = th.dataset.col;
-  const current = tableState.sort[col] || 'none';
-  // cycle: none -> asc -> desc -> asc...
-  const next = current === 'asc' ? 'desc' : 'asc';
+  const prev = tableState.sort[col] || 'desc';
+  const next = prev === 'asc' ? 'desc' : 'asc';
   tableState.sort = {[col]: next};
-  // update headers
   th.parentElement.querySelectorAll('th').forEach(h=>h.classList.remove('sort-asc','sort-desc'));
   th.classList.add(next==='asc'?'sort-asc':'sort-desc');
-  // re-render
   tableState.render();
 }
 
@@ -190,25 +182,24 @@ function renderTable(rows, showCountry){
     ? [{k:'Donor',t:'Donor'},{k:'RioMarker',t:'Climate'},{k:'Sector',t:'Sector'},{k:'Country',t:'Country'},{k:'usd_m',t:'USD (M)'}]
     : [{k:'Donor',t:'Donor'},{k:'RioMarker',t:'Climate'},{k:'Sector',t:'Sector'},{k:'usd_m',t:'USD (M)'}];
   const thead=document.createElement('thead'); const trh=document.createElement('tr');
-  const tableState = { sort:{}, render: ()=>{} };
+  const tableState = { sort:{usd_m:'desc'}, render: ()=>{} };
 
   headers.forEach(h=>{
     const th=document.createElement('th'); th.textContent=h.t; th.dataset.col=h.k;
+    if (h.k==='usd_m') th.classList.add('sort-desc');
     th.addEventListener('click', ()=>sortTable(tableState, th));
     trh.appendChild(th);
   });
   thead.appendChild(trh); t.appendChild(thead);
 
   tableState.render = ()=>{
-    const [sortCol,dir] = Object.entries(tableState.sort)[0] || [null,null];
+    const [sortCol,dir] = Object.entries(tableState.sort)[0] || ['usd_m','desc'];
     const sorted = [...rows];
-    if(sortCol){
-      sorted.sort((a,b)=>{
-        const av=a[sortCol], bv=b[sortCol];
-        if (sortCol==='usd_m') return dir==='asc' ? av-bv : bv-av;
-        return dir==='asc' ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
-      });
-    }
+    sorted.sort((a,b)=>{
+      const av=a[sortCol], bv=b[sortCol];
+      if (sortCol==='usd_m') return dir==='asc' ? av-bv : bv-av;
+      return dir==='asc' ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+    });
     tb.innerHTML="";
     sorted.forEach(r=>{
       const tr=document.createElement('tr');
@@ -229,34 +220,27 @@ function render(){
   const donors = new Set(getSel('donorSel'));
   const sectors = new Set(getSel('sectorSel'));
   const rios = new Set(getSel('rioSel'));
-  const showCountry = document.getElementById('showCountryStage').checked;
+  const showCountry = document.getElementById('showCountryStage').checked; // <-- SINGLE declaration
   const mult = Number(document.getElementById('multiplier').value); // 1, 1e3, 1e6
 
-  // Filter per selected dimension
-  const all = DATA.records.filter(r =>
+  // Filter
+  const selected = DATA.records.filter(r =>
     years.has(r.year) && countries.has(r.Country) && donors.has(r.Donor) &&
     sectors.has(r.Sector) && rios.has(r.RioMarker)
   );
 
-  // Apply display multiplier: DATA.usd_m = USD/1e6; display as (USD * mult)/1e6
-  const factor = mult; // multiply M-USD by mult
-  const fm = all.map(r => ({...r, usd_m: r.usd_m * factor}));
+  // Scale: DATA.usd_m is USD/1e6; multiply display by 'mult'
+  const fm = selected.map(r => ({...r, usd_m: r.usd_m * mult}));
 
   // KPIs
   document.getElementById('rowsBadge').textContent = `Rows: ${fm.length.toLocaleString()}`;
   const totalM = fm.reduce((a,x)=>a + x.usd_m, 0);
   document.getElementById('sumBadge').textContent = `Total: ${fmtM(totalM)} M USD`;
 
-  // Aggregate for each stage (M USD)
-  const add = (map,key,val)=> map.set(key,(map.get(key)||0)+val);
-
-  const byDonor = new Map();
-  const byRio = new Map();
-  const bySector = new Map();
-  const byCountry = new Map();
-  const byDonorRio = new Map();       // donor|rio
-  const byRioSector = new Map();      // rio|sector
-  const bySectorCountry = new Map();  // sector|country
+  // Aggregates
+  const add = (m,k,v)=> m.set(k,(m.get(k)||0)+v);
+  const byDonor = new Map(), byRio=new Map(), bySector=new Map(), byCountry=new Map();
+  const byDonorRio=new Map(), byRioSector=new Map(), bySectorCountry=new Map();
 
   fm.forEach(r=>{
     add(byDonor, r.Donor, r.usd_m);
@@ -268,7 +252,7 @@ function render(){
     add(bySectorCountry, r.Sector+"|"+r.Country, r.usd_m);
   });
 
-  // Cutoffs (already in M USD space)
+  // Cutoffs (M USD)
   const cut = {
     donor:   Math.max(0, Number(document.getElementById('minDonor').value||0)),
     sector:  Math.max(0, Number(document.getElementById('minSector').value||0)),
@@ -287,27 +271,23 @@ function render(){
   };
   const pruned = applyCutoffs(aggObj, cut);
 
-  // Build Sankey
+  // Sankey
   const labels = ["Total Aid"];
   const idx = (lab)=>{ let i=labels.indexOf(lab); if(i===-1){labels.push(lab); i=labels.length-1;} return i; };
   const src=[], tgt=[], val=[];
 
-  // Total → Donor
   for (const [donor,v] of Object.entries(pruned.donorTotals)) {
     src.push(idx("Total Aid")); tgt.push(idx(donor)); val.push(v);
   }
-  // Donor → Rio
   for (const [k,v] of Object.entries(pruned.donorRio)) {
     const [donor,rio] = k.split("|");
     src.push(idx(donor)); tgt.push(idx(rio)); val.push(v);
   }
-  // Rio → Sector
   for (const [k,v] of Object.entries(pruned.rioSector)) {
     const [rio,sector] = k.split("|");
     src.push(idx(rio)); tgt.push(idx(sector)); val.push(v);
   }
-  // Sector → Country (optional)
-  if (document.getElementById('showCountryStage').checked) {
+  if (showCountry) {
     for (const [k,v] of Object.entries(pruned.sectorCountry)) {
       const [sector,country] = k.split("|");
       src.push(idx(sector)); tgt.push(idx(country)); val.push(v);
@@ -319,14 +299,12 @@ function render(){
     node:{ label:labels, pad:15, thickness:18, hovertemplate:"%{label}<extra></extra>" },
     link:{ source:src, target:tgt, value:val, hovertemplate:"Flow: %{value:.2f} M USD<extra></extra>" }
   }], {
-    title:`Aid Flow (M USD, multiplier ${factor.toLocaleString()}×)`,
+    title:`Aid Flow (M USD, multiplier ${mult.toLocaleString()}×)`,
     font:{size:12}, paper_bgcolor:"transparent", plot_bgcolor:"transparent",
-    height: document.getElementById('showCountryStage').checked ? 740 : 660,
-    margin:{t:40,l:10,r:10,b:10}
+    height: showCountry ? 740 : 660, margin:{t:40,l:10,r:10,b:10}
   });
 
-  // Table rows
-  const showCountry = document.getElementById('showCountryStage').checked;
+  // Table
   const key = (r)=> showCountry
     ? r.Donor+"|"+r.RioMarker+"|"+r.Sector+"|"+r.Country
     : r.Donor+"|"+r.RioMarker+"|"+r.Sector;
@@ -348,14 +326,14 @@ async function main(){
   DATA = await resp.json();
   document.getElementById('yearsBadge').textContent = `${DATA.meta.years[0]}–${DATA.meta.years[1]}`;
 
-  // Select ALL by default (your request), even if it makes a giant table
+  // Select ALL by default
   fillSelectAll('yearSel', DATA.distinct.years.map(String));
   fillSelectAll('countrySel', DATA.distinct.countries);
   fillSelectAll('donorSel', DATA.distinct.donors);
   fillSelectAll('sectorSel', DATA.distinct.sectors);
   fillSelectAll('rioSel', DATA.distinct.rios);
 
-  // Hook events
+  // Events
   ['applyBtn','yearSel','countrySel','donorSel','sectorSel','rioSel','showCountryStage','minDonor','minSector','minRio','minCountry','multiplier']
     .forEach(id=>{
       const el = document.getElementById(id);
@@ -370,5 +348,3 @@ main().catch(err=>{ console.error(err); alert("Failed to load: "+err.message); }
 </script>
 </body>
 </html>
-
-
